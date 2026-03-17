@@ -1,0 +1,51 @@
+# =============================================================================
+# DA-MACAÉ v2 :: Pod Disruption Budgets
+# =============================================================================
+# Ensures at least 1 pod is always available during voluntary disruptions
+# (node upgrades, AKS cluster scaling, etc.)
+# =============================================================================
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: da-macae-backend
+  namespace: da-macae
+  labels:
+    app.kubernetes.io/name: da-macae-backend
+    app.kubernetes.io/component: pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: da-macae-backend
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: da-macae-frontend
+  namespace: da-macae
+  labels:
+    app.kubernetes.io/name: da-macae-frontend
+    app.kubernetes.io/component: pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: da-macae-frontend
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: da-macae-mcp
+  namespace: da-macae
+  labels:
+    app.kubernetes.io/name: da-macae-mcp
+    app.kubernetes.io/component: pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: da-macae-mcp

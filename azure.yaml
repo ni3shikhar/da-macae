@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+name: da-macae
+metadata:
+  template: da-macae@0.0.1-beta
+
+services:
+  backend:
+    project: src/backend
+    language: python
+    host: containerapp
+    docker:
+      path: ../../Dockerfile
+      context: ../../
+      buildTarget: backend
+
+  frontend:
+    project: src/frontend
+    language: ts
+    host: containerapp
+    docker:
+      path: ../../Dockerfile
+      context: ../../
+      buildTarget: frontend
+
+  mcp-server:
+    project: src/mcp_server
+    language: python
+    host: containerapp
+    docker:
+      path: ../../Dockerfile
+      context: ../../
+      buildTarget: mcp-server
+
+infra:
+  provider: bicep
+  path: deployment/bicep
+  module: main

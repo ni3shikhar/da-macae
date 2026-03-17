@@ -1,0 +1,41 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Docker Build & Deploy",
+			"type": "shell",
+			"command": "docker compose up -d --build",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Start Docker Desktop",
+			"type": "shell",
+			"command": "Start-Process 'C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe'; Start-Sleep -Seconds 30; docker ps",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Verify Deployment",
+			"type": "shell",
+			"command": "docker cp da-macae-backend:/app/v1/orchestration/orchestration_manager.py c:\\git_claude\\da-macae\\deployed_check.py && findstr /C:\"_llm_chat_completion\" c:\\git_claude\\da-macae\\deployed_check.py | find /C /V \"\" "
+		},
+		{
+			"label": "Verify Deployment 2",
+			"type": "shell",
+			"command": "docker cp da-macae-backend:/app/v1/orchestration/orchestration_manager.py c:\\git_claude\\da-macae\\deployed_check.py; Select-String '_llm_chat_completion' c:\\git_claude\\da-macae\\deployed_check.py | Measure-Object | ForEach-Object { Write-Host ('MATCH_COUNT: ' + $_.Count) }"
+		},
+		{
+			"label": "Docker Rebuild Backend",
+			"type": "shell",
+			"command": "docker compose build --no-cache backend; docker compose up -d --force-recreate backend; Start-Sleep 30; Write-Host 'BUILD_DONE'"
+		},
+		{
+			"label": "Backend Build",
+			"type": "shell",
+			"command": "docker compose build --no-cache backend 2>&1 | Select-Object -Last 30"
+		}
+	]
+}

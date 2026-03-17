@@ -1,0 +1,90 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.39.26.7824",
+      "templateHash": "18046601435229762412"
+    }
+  },
+  "parameters": {
+    "projectName": {
+      "type": "string"
+    },
+    "environment": {
+      "type": "string"
+    },
+    "location": {
+      "type": "string"
+    },
+    "keyVaultName": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "object"
+    }
+  },
+  "variables": {
+    "envSuffix": "[if(equals(parameters('environment'), 'prod'), '', format('-{0}', parameters('environment')))]",
+    "adfName": "[format('{0}adf{1}', parameters('projectName'), variables('envSuffix'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DataFactory/factories",
+      "apiVersion": "2018-06-01",
+      "name": "[variables('adfName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "publicNetworkAccess": "Enabled",
+        "encryption": {
+          "vaultBaseUrl": "[format('https://{0}.vault.azure.net/', parameters('keyVaultName'))]",
+          "keyName": "adf-encryption-key",
+          "keyVersion": "1"
+        }
+      },
+      "identity": {
+        "type": "SystemAssigned"
+      }
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/accessPolicies",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/add', parameters('keyVaultName'))]",
+      "properties": {
+        "accessPolicies": [
+          {
+            "tenantId": "[subscription().tenantId]",
+            "objectId": "[reference(resourceId('Microsoft.DataFactory/factories', variables('adfName')), '2018-06-01', 'full').identity.principalId]",
+            "permissions": {
+              "secrets": [
+                "get",
+                "list"
+              ],
+              "certificates": [],
+              "keys": []
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories', variables('adfName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "name": {
+      "type": "string",
+      "value": "[variables('adfName')]"
+    },
+    "id": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.DataFactory/factories', variables('adfName'))]"
+    },
+    "principalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.DataFactory/factories', variables('adfName')), '2018-06-01', 'full').identity.principalId]"
+    }
+  }
+}

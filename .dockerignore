@@ -1,0 +1,42 @@
+# =============================================================================
+# DA-MACAÉ v2 :: Docker ignore
+# =============================================================================
+
+# IDE
+.idea/
+.vscode/
+
+# Git
+.git/
+.gitignore
+
+# Environment secrets
+.env
+.env.*
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Deployment configs (not needed in image)
+deployment/
+
+# Documentation
+*.md
+docs/
+LICENSE
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/node_modules/
+
+# Logs
+logs/
+*.log

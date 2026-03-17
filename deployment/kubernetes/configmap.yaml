@@ -1,0 +1,36 @@
+# =============================================================================
+# DA-MACAÉ v2 :: ConfigMaps — non-sensitive configuration
+# =============================================================================
+
+---
+# ── Backend ConfigMap ────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: da-macae-backend-config
+  namespace: da-macae
+  labels:
+    app.kubernetes.io/name: da-macae-backend
+    app.kubernetes.io/component: config
+data:
+  COSMOS_DATABASE: "damacae"
+  COSMOS_CONTAINER: "sessions"
+  DATABASE_BACKEND: "cosmosdb"
+  AZURE_OPENAI_DEPLOYMENT: "gpt-4o"
+  AZURE_OPENAI_API_VERSION: "2024-12-01-preview"
+  MCP_SERVER_URL: "http://da-macae-mcp:8001"
+  TEAM_DATA_DIR: "/app/data/agent_teams"
+  LOG_LEVEL: "INFO"
+
+---
+# ── MCP Server ConfigMap ─────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: da-macae-mcp-config
+  namespace: da-macae
+  labels:
+    app.kubernetes.io/name: da-macae-mcp
+    app.kubernetes.io/component: config
+data:
+  LOG_LEVEL: "INFO"

@@ -1,0 +1,34 @@
+# =============================================================================
+# DA-MACAÉ v2 :: Kustomization
+# =============================================================================
+# V2 deploys three services: backend (Python/FastAPI), frontend (React/Nginx),
+# and mcp-server (FastMCP).
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: da-macae
+
+resources:
+  - namespace.yaml
+  - service-account.yaml
+  - configmap.yaml
+  - secret-provider.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - hpa.yaml
+  - pdb.yaml
+  - network-policy.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: da-macae-platform
+  app.kubernetes.io/managed-by: kustomize
+
+images:
+  - name: damacaeacr.azurecr.io/da-macae-backend
+    newTag: latest
+  - name: damacaeacr.azurecr.io/da-macae-frontend
+    newTag: latest
+  - name: damacaeacr.azurecr.io/da-macae-mcp
+    newTag: latest

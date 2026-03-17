@@ -1,0 +1,304 @@
+# =============================================================================
+# DA-MACAÉ v2 :: Docker Compose — Local Development
+# =============================================================================
+# Services: backend (FastAPI), frontend (React/Vite), mcp-server,
+#           cosmosdb-emulator, sqlserver, postgres, azurite
+#
+# Usage:
+#   docker compose up -d          # start all services
+#   docker compose up -d --build  # rebuild and start
+#   docker compose logs -f backend  # follow backend logs
+#   docker compose down -v        # stop and remove volumes
+# =============================================================================
+
+services:
+  # ─── Backend (Python / FastAPI) ────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: backend
+    container_name: da-macae-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Azure Credentials (Service Principal for DefaultAzureCredential)
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET}
+      # Azure OpenAI (AI Services endpoint)
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-https://your-openai.openai.azure.com/}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
+      AZURE_OPENAI_CHAT_DEPLOYMENT: "gpt-4o"
+      AZURE_OPENAI_API_VERSION: "2024-12-01-preview"
+      # Azure AI Foundry (optional — falls back to local mode)
+      AZURE_AI_FOUNDRY_PROJECT_CONNECTION_STRING: "https://foundy2i3h.services.ai.azure.com/api/projects/project"
+      # Cosmos DB Emulator
+      COSMOS_ENDPOINT: https://cosmosdb:8081/
+      COSMOS_KEY: "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw=="
+      COSMOS_DATABASE: damacae
+      COSMOS_CONTAINER: sessions
+      # Database backend: cosmosdb | in_memory
+      DATABASE_BACKEND: ${DATABASE_BACKEND:-in_memory}
+      # Anthropic Claude (alternative LLM provider)
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-20250514}
+      # MCP server URL
+      MCP_SERVER_URL: http://mcp-server:8001
+      # Azurite
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1"
+      # Team data path
+      TEAM_DATA_DIR: /app/data/agent_teams
+      # Logging
+      LOG_LEVEL: INFO
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      azurite:
+        condition: service_started
+    networks:
+      - da-macae-net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  # ─── Frontend (React / Vite) ───────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend
+    container_name: da-macae-frontend
+    ports:
+      - "3001:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - da-macae-net
+
+  # ─── MCP Tool Server ──────────────────────────────────────────────────
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: mcp-server
+    container_name: da-macae-mcp
+    ports:
+      - "8001:8001"
+    environment:
+      # ── Azure Credentials (Service Principal for DefaultAzureCredential)
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET}
+      # ── SQL Server
+      SQLSERVER_DSN: >-
+        DRIVER={FreeTDS};SERVER=sqlserver;PORT=1433;
+        DATABASE=master;UID=sa;PWD=Dev@Password123!;TDS_Version=7.4
+      # ── PostgreSQL
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: damacae
+      POSTGRES_PASSWORD: "Dev@Password123!"
+      POSTGRES_DB: target_db
+      # ── Azure Blob / Azurite
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1"
+      # ── MySQL / MariaDB
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: damacae
+      MYSQL_PASSWORD: "Dev@Password123!"
+      MYSQL_DB: source_db
+      # ── Oracle (thin-mode connection — no instant client needed)
+      ORACLE_DSN: ${ORACLE_DSN:-}
+      ORACLE_USER: ${ORACLE_USER:-}
+      ORACLE_PASSWORD: ${ORACLE_PASSWORD:-}
+      # ── MongoDB
+      MONGODB_URI: mongodb://damacae:Dev%40Password123%21@mongodb:27017/
+      # ── Cosmos DB (NoSQL API — emulator)
+      COSMOS_NOSQL_ENDPOINT: https://cosmosdb:8081/
+      COSMOS_NOSQL_KEY: "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw=="
+      # ── Snowflake (external — configure via env)
+      SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT:-}
+      SNOWFLAKE_USER: ${SNOWFLAKE_USER:-}
+      SNOWFLAKE_PASSWORD: ${SNOWFLAKE_PASSWORD:-}
+      SNOWFLAKE_WAREHOUSE: ${SNOWFLAKE_WAREHOUSE:-COMPUTE_WH}
+      SNOWFLAKE_DATABASE: ${SNOWFLAKE_DATABASE:-}
+      SNOWFLAKE_SCHEMA: ${SNOWFLAKE_SCHEMA:-PUBLIC}
+      SNOWFLAKE_ROLE: ${SNOWFLAKE_ROLE:-}
+      # ── ADLS Gen2 (external — configure via env)
+      ADLS_ACCOUNT_NAME: ${ADLS_ACCOUNT_NAME:-}
+      ADLS_ACCOUNT_KEY: ${ADLS_ACCOUNT_KEY:-}
+      # ── Databricks SQL (external — configure via env)
+      DATABRICKS_HOST: ${DATABRICKS_HOST:-}
+      DATABRICKS_HTTP_PATH: ${DATABRICKS_HTTP_PATH:-}
+      DATABRICKS_TOKEN: ${DATABRICKS_TOKEN:-}
+      # ── Google BigQuery (external — configure via env)
+      BIGQUERY_PROJECT: ${BIGQUERY_PROJECT:-}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+      # ── Azure Data Factory (external — configure via env)
+      AZURE_SUBSCRIPTION_ID: f10c88e8-da02-434f-852e-5d24d0cea01e
+      ADF_RESOURCE_GROUP: ${ADF_RESOURCE_GROUP:-}
+      ADF_FACTORY_NAME: ${ADF_FACTORY_NAME:-}
+      # ── Synapse Analytics (external — configure via env)
+      SYNAPSE_WORKSPACE_ENDPOINT: ${SYNAPSE_WORKSPACE_ENDPOINT:-}
+      # ── General
+      MCP_PORT: 8001
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      mongodb:
+        condition: service_started
+      azurite:
+        condition: service_started
+    networks:
+      - da-macae-net
+
+  # ─── Azure Cosmos DB Emulator ──────────────────────────────────────────
+  cosmosdb:
+    image: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:latest
+    container_name: da-macae-cosmosdb
+    ports:
+      - "8081:8081"
+      - "10250-10255:10250-10255"
+    environment:
+      AZURE_COSMOS_EMULATOR_PARTITION_COUNT: 10
+      AZURE_COSMOS_EMULATOR_ENABLE_DATA_PERSISTENCE: "true"
+      AZURE_COSMOS_EMULATOR_IP_ADDRESS_OVERRIDE: "127.0.0.1"
+    volumes:
+      - cosmosdb-data:/tmp/cosmos/appdata
+    networks:
+      - da-macae-net
+    mem_limit: 3g
+    cpus: 2.0
+
+  # ─── SQL Server (Migration Source) ─────────────────────────────────────
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: da-macae-sqlserver
+    ports:
+      - "1433:1433"
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Dev@Password123!"
+      MSSQL_PID: Developer
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    networks:
+      - da-macae-net
+    healthcheck:
+      test: /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "Dev@Password123!" -C -Q "SELECT 1" -b
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 10
+    mem_limit: 2g
+
+  # ─── PostgreSQL (Migration Target) ────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: da-macae-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: target_db
+      POSTGRES_USER: damacae
+      POSTGRES_PASSWORD: "Dev@Password123!"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - da-macae-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U damacae -d target_db"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+  # ─── MySQL (Migration Source) ───────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: da-macae-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: "Dev@Password123!"
+      MYSQL_DATABASE: source_db
+      MYSQL_USER: damacae
+      MYSQL_PASSWORD: "Dev@Password123!"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - da-macae-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pDev@Password123!"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    mem_limit: 1g
+
+  # ─── MongoDB (Migration Source) ────────────────────────────────────────
+  mongodb:
+    image: mongo:7.0
+    container_name: da-macae-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: damacae
+      MONGO_INITDB_ROOT_PASSWORD: "Dev@Password123!"
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - da-macae-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+    mem_limit: 1g
+
+  # ─── Azurite (Azure Storage Emulator) ─────────────────────────────────
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    container_name: da-macae-azurite
+    ports:
+      - "10000:10000"   # Blob
+      - "10001:10001"   # Queue
+      - "10002:10002"   # Table
+    volumes:
+      - azurite-data:/data
+    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --location /data
+    networks:
+      - da-macae-net
+
+volumes:
+  cosmosdb-data:
+    driver: local
+  sqlserver-data:
+    driver: local
+  postgres-data:
+    driver: local
+  mysql-data:
+    driver: local
+  mongodb-data:
+    driver: local
+  azurite-data:
+    driver: local
+
+networks:
+  da-macae-net:
+    driver: bridge
+    name: da-macae-network
