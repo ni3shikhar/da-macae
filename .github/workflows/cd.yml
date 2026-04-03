@@ -1,9 +1,7 @@
 # =============================================================================
 # AGENTRA :: CD Pipeline - Deploy to Azure
 # =============================================================================
-# Deploys infrastructure (Bicep) and container apps to Azure.
-# Uses Azure Developer CLI (azd) for orchestration.
-#
+# Flow: Setup -> Deploy Infra (creates ACR) -> Build & Push -> Deploy Apps
 # Environments: dev (auto on develop), staging (auto on main), prod (manual)
 # =============================================================================
 
@@ -35,18 +33,16 @@ on:
         type: boolean
         default: false
 
-# Only allow one deployment per environment at a time
 concurrency:
   group: deploy-${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'staging') || 'dev' }}
   cancel-in-progress: false
 
 permissions:
-  id-token: write   # Required for OIDC auth with Azure
+  id-token: write
   contents: read
 
 env:
   DOCKER_BUILDKIT: 1
-  AZD_INITIAL_ENVIRONMENT_CONFIG: '{"subscription":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","location":"${{ vars.AZURE_LOCATION }}"}'
 
 jobs:
   # ── Determine Environment ──────────────────────────────────────────────────
@@ -56,7 +52,6 @@ jobs:
     outputs:
       environment: ${{ steps.env.outputs.environment }}
       image_tag: ${{ steps.env.outputs.image_tag }}
-
     steps:
       - name: Determine environment
         id: env
@@ -70,59 +65,17 @@ jobs:
           fi
           echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
 
-  # ── Build & Push Container Images ──────────────────────────────────────────
-  build-push:
-    name: Build & Push - ${{ matrix.target }}
-    runs-on: ubuntu-latest
-    needs: setup
-    environment: ${{ needs.setup.outputs.environment }}
-    strategy:
-      matrix:
-        include:
-          - target: backend
-            image_name: agentra-backend
-          - target: frontend
-            image_name: agentra-frontend
-          - target: mcp-server
-            image_name: agentra-mcp
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Login to Azure Container Registry
-        run: |
-          az acr login --name ${{ vars.ACR_NAME }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push ${{ matrix.target }}
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          target: ${{ matrix.target }}
-          push: true
-          tags: |
-            ${{ vars.ACR_LOGIN_SERVER }}/${{ matrix.image_name }}:${{ needs.setup.outputs.image_tag }}
-            ${{ vars.ACR_LOGIN_SERVER }}/${{ matrix.image_name }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # ── Deploy Infrastructure (Bicep via AZD) ──────────────────────────────────
+  # ── Step 1: Deploy Infrastructure ──────────────────────────────────────────
+  # Must run FIRST so ACR and other resources exist before image push
   deploy-infra:
     name: Deploy Infrastructure
     runs-on: ubuntu-latest
-    needs: [setup, build-push]
+    needs: [setup]
     if: ${{ github.event.inputs.skip_infra != 'true' }}
     environment: ${{ needs.setup.outputs.environment }}
+    outputs:
+      acr_name: ${{ steps.acr.outputs.name }}
+      acr_login_server: ${{ steps.acr.outputs.login_server }}
 
     steps:
       - uses: actions/checkout@v4
@@ -163,12 +116,85 @@ jobs:
 
           azd provision --no-prompt
 
-  # ── Deploy Applications ────────────────────────────────────────────────────
+      - name: Get ACR details from deployed resources
+        id: acr
+        run: |
+          ENV="${{ needs.setup.outputs.environment }}"
+          RG="damacae-rg-${ENV}"
+          if [ "$ENV" == "prod" ]; then RG="damacae-rg"; fi
+
+          ACR_NAME=$(az acr list -g "$RG" --query "[0].name" -o tsv 2>/dev/null || echo "")
+          ACR_SERVER=$(az acr list -g "$RG" --query "[0].loginServer" -o tsv 2>/dev/null || echo "")
+          echo "name=${ACR_NAME}" >> $GITHUB_OUTPUT
+          echo "login_server=${ACR_SERVER}" >> $GITHUB_OUTPUT
+          echo "::notice::ACR: ${ACR_NAME} (${ACR_SERVER})"
+
+  # ── Step 2: Build & Push Container Images ──────────────────────────────────
+  # Runs AFTER infra so ACR exists to receive images
+  build-push:
+    name: Build & Push - ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-infra]
+    if: ${{ always() && (needs.deploy-infra.result == 'success' || needs.deploy-infra.result == 'skipped') }}
+    environment: ${{ needs.setup.outputs.environment }}
+    strategy:
+      matrix:
+        include:
+          - target: backend
+            image_name: agentra-backend
+          - target: frontend
+            image_name: agentra-frontend
+          - target: mcp-server
+            image_name: agentra-mcp
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Determine ACR
+        id: acr
+        run: |
+          ACR_NAME="${{ needs.deploy-infra.outputs.acr_name }}"
+          ACR_SERVER="${{ needs.deploy-infra.outputs.acr_login_server }}"
+          if [ -z "$ACR_NAME" ] || [ "$ACR_NAME" == "" ]; then
+            ACR_NAME="${{ vars.ACR_NAME }}"
+            ACR_SERVER="${{ vars.ACR_LOGIN_SERVER }}"
+          fi
+          echo "name=${ACR_NAME}" >> $GITHUB_OUTPUT
+          echo "login_server=${ACR_SERVER}" >> $GITHUB_OUTPUT
+          echo "Using ACR: ${ACR_NAME} (${ACR_SERVER})"
+
+      - name: Login to ACR
+        run: az acr login --name ${{ steps.acr.outputs.name }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push ${{ matrix.target }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: ${{ matrix.target }}
+          push: true
+          tags: |
+            ${{ steps.acr.outputs.login_server }}/${{ matrix.image_name }}:${{ needs.setup.outputs.image_tag }}
+            ${{ steps.acr.outputs.login_server }}/${{ matrix.image_name }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Step 3: Deploy Applications ────────────────────────────────────────────
   deploy-apps:
     name: Deploy Applications
     runs-on: ubuntu-latest
     needs: [setup, build-push, deploy-infra]
-    if: ${{ always() && needs.build-push.result == 'success' && (needs.deploy-infra.result == 'success' || needs.deploy-infra.result == 'skipped') }}
+    if: ${{ always() && needs.build-push.result == 'success' }}
     environment:
       name: ${{ needs.setup.outputs.environment }}
       url: ${{ steps.endpoints.outputs.frontend_url }}
