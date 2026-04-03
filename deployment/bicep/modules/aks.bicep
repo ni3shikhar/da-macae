@@ -61,7 +61,7 @@ var nodeConfig = {
   }
 }
 
-var kubernetesVersion = '1.30'
+var kubernetesVersion = '1.31'
 
 // ── AKS Cluster ─────────────────────────────────────────────────────────────
 

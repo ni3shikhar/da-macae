@@ -39,8 +39,8 @@ resource appConfig 'Microsoft.AppConfiguration/configurationStores@2023-03-01' =
   properties: {
     publicNetworkAccess: environment == 'prod' ? 'Disabled' : 'Enabled'
     disableLocalAuth: false
-    softDeleteRetentionInDays: environment == 'prod' ? 7 : 1
-    enablePurgeProtection: environment == 'prod'
+    softDeleteRetentionInDays: skuName == 'standard' ? 7 : 0
+    enablePurgeProtection: skuName == 'standard' && environment == 'prod'
   }
 }
 

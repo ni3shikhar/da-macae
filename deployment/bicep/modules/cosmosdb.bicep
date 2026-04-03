@@ -45,10 +45,12 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
   kind: 'GlobalDocumentDB'
   properties: {
     databaseAccountOfferType: 'Standard'
-    consistencyPolicy: {
+    consistencyPolicy: consistencyLevel == 'BoundedStaleness' ? {
       defaultConsistencyLevel: consistencyLevel
-      maxStalenessPrefix: consistencyLevel == 'BoundedStaleness' ? 100000 : null
-      maxIntervalInSeconds: consistencyLevel == 'BoundedStaleness' ? 300 : null
+      maxStalenessPrefix: 100000
+      maxIntervalInSeconds: 300
+    } : {
+      defaultConsistencyLevel: consistencyLevel
     }
     locations: [
       {
