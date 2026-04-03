@@ -257,12 +257,45 @@ Key environment variables (configured in `docker-compose.yml` for local dev):
 
 ## Azure Deployment
 
+### Quick Deploy (Recommended)
+
+Use the deployment script for a guided deployment experience:
+
+```powershell
+# Deploy to dev environment
+.\deploy.ps1 -Environment dev
+
+# Deploy to production
+.\deploy.ps1 -Environment prod -Location westus2
+
+# Deploy containers only (skip infrastructure)
+.\deploy.ps1 -Environment dev -SkipInfra
+```
+
+### Manual Deploy with AZD
+
 ```bash
 # Authenticate
 azd auth login
 
-# Deploy all resources (Cosmos DB, OpenAI, Container Apps, etc.)
+# Deploy all resources
 azd up
+```
+
+### Environment Configuration
+
+1. Copy `.env.template` to `.env.dev` (or `.env.staging`, `.env.prod`)
+2. Fill in your secrets (API keys, connection strings)
+3. The deployment script automatically loads these values
+
+### Teardown Resources
+
+```powershell
+# Remove all resources (with confirmation)
+.\teardown.ps1 -Environment dev
+
+# Force remove + purge soft-deleted resources
+.\teardown.ps1 -Environment dev -Force -Purge
 ```
 
 ### Azure Resources Provisioned

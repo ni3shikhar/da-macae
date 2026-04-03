@@ -1,0 +1,266 @@
+# =============================================================================
+# AGENTRA :: CD Pipeline - Deploy to Azure
+# =============================================================================
+# Deploys infrastructure (Bicep) and container apps to Azure.
+# Uses Azure Developer CLI (azd) for orchestration.
+#
+# Environments: dev (auto on develop), staging (auto on main), prod (manual)
+# =============================================================================
+
+name: CD - Deploy to Azure
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.vscode/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+        default: dev
+      skip_infra:
+        description: 'Skip infrastructure provisioning'
+        required: false
+        type: boolean
+        default: false
+
+# Only allow one deployment per environment at a time
+concurrency:
+  group: deploy-${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'staging') || 'dev' }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write   # Required for OIDC auth with Azure
+  contents: read
+
+env:
+  DOCKER_BUILDKIT: 1
+  AZD_INITIAL_ENVIRONMENT_CONFIG: '{"subscription":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","location":"${{ vars.AZURE_LOCATION }}"}'
+
+jobs:
+  # ── Determine Environment ──────────────────────────────────────────────────
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.env.outputs.environment }}
+      image_tag: ${{ steps.env.outputs.image_tag }}
+
+    steps:
+      - name: Determine environment
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          fi
+          echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+
+  # ── Build & Push Container Images ──────────────────────────────────────────
+  build-push:
+    name: Build & Push - ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    needs: setup
+    environment: ${{ needs.setup.outputs.environment }}
+    strategy:
+      matrix:
+        include:
+          - target: backend
+            image_name: agentra-backend
+          - target: frontend
+            image_name: agentra-frontend
+          - target: mcp-server
+            image_name: agentra-mcp
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to Azure Container Registry
+        run: |
+          az acr login --name ${{ vars.ACR_NAME }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push ${{ matrix.target }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: ${{ matrix.target }}
+          push: true
+          tags: |
+            ${{ vars.ACR_LOGIN_SERVER }}/${{ matrix.image_name }}:${{ needs.setup.outputs.image_tag }}
+            ${{ vars.ACR_LOGIN_SERVER }}/${{ matrix.image_name }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Deploy Infrastructure (Bicep via AZD) ──────────────────────────────────
+  deploy-infra:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+    needs: [setup, build-push]
+    if: ${{ github.event.inputs.skip_infra != 'true' }}
+    environment: ${{ needs.setup.outputs.environment }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure Developer CLI
+        uses: Azure/setup-azd@v1
+
+      - name: Get admin object ID
+        id: admin
+        run: |
+          ADMIN_OID=$(az ad sp show --id ${{ secrets.AZURE_CLIENT_ID }} --query id -o tsv)
+          echo "object_id=$ADMIN_OID" >> $GITHUB_OUTPUT
+
+      - name: AZD Provision
+        env:
+          AZURE_ENV_NAME: ${{ needs.setup.outputs.environment }}
+          AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --federated-credential-provider "github" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}"
+
+          azd env new ${{ needs.setup.outputs.environment }} || true
+          azd env select ${{ needs.setup.outputs.environment }}
+          azd env set AZURE_LOCATION "${{ vars.AZURE_LOCATION }}"
+          azd env set ADMIN_OBJECT_ID "${{ steps.admin.outputs.object_id }}"
+          azd env set PROJECT_NAME "damacae"
+
+          azd provision --no-prompt
+
+  # ── Deploy Applications ────────────────────────────────────────────────────
+  deploy-apps:
+    name: Deploy Applications
+    runs-on: ubuntu-latest
+    needs: [setup, build-push, deploy-infra]
+    if: ${{ always() && needs.build-push.result == 'success' && (needs.deploy-infra.result == 'success' || needs.deploy-infra.result == 'skipped') }}
+    environment:
+      name: ${{ needs.setup.outputs.environment }}
+      url: ${{ steps.endpoints.outputs.frontend_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure Developer CLI
+        uses: Azure/setup-azd@v1
+
+      - name: AZD Deploy
+        env:
+          AZURE_ENV_NAME: ${{ needs.setup.outputs.environment }}
+          AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --federated-credential-provider "github" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}"
+
+          azd env select ${{ needs.setup.outputs.environment }}
+          azd deploy --no-prompt
+
+      - name: Get endpoints
+        id: endpoints
+        run: |
+          FRONTEND_URL=$(azd env get-values | grep -i "FRONTEND.*URL\|SERVICE_FRONTEND.*ENDPOINT" | head -1 | cut -d= -f2 | tr -d '"' || echo "")
+          echo "frontend_url=${FRONTEND_URL}" >> $GITHUB_OUTPUT
+
+      - name: Deployment summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | \`${{ needs.setup.outputs.environment }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image Tag | \`${{ needs.setup.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Frontend URL | ${{ steps.endpoints.outputs.frontend_url }} |" >> $GITHUB_STEP_SUMMARY
+
+  # ── Production Gate (manual approval required) ─────────────────────────────
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-apps]
+    if: ${{ needs.setup.outputs.environment == 'staging' && github.ref == 'refs/heads/main' }}
+    environment:
+      name: prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure Developer CLI
+        uses: Azure/setup-azd@v1
+
+      - name: Deploy to Production
+        env:
+          AZURE_ENV_NAME: prod
+          AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --federated-credential-provider "github" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}"
+
+          azd env new prod || true
+          azd env select prod
+          azd env set AZURE_LOCATION "${{ vars.AZURE_LOCATION }}"
+          azd env set ADMIN_OBJECT_ID "${{ secrets.ADMIN_OBJECT_ID }}"
+          azd env set PROJECT_NAME "damacae"
+
+          azd provision --no-prompt
+          azd deploy --no-prompt
+
+      - name: Production deployment summary
+        run: |
+          echo "## PRODUCTION Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Deployed by: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
