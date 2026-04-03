@@ -34,9 +34,9 @@ var openAiName = '${projectName}-oai-${uniqueSuffix}${envSuffix}'
 // ── Configuration per environment ───────────────────────────────────────────
 
 var capacityConfig = {
-  dev: { tpmCapacity: 30, skuName: 'S0' }
-  staging: { tpmCapacity: 60, skuName: 'S0' }
-  prod: { tpmCapacity: 120, skuName: 'S0' }
+  dev: { tpmCapacity: 10, skuName: 'S0' }
+  staging: { tpmCapacity: 20, skuName: 'S0' }
+  prod: { tpmCapacity: 50, skuName: 'S0' }
 }
 
 // ── Azure OpenAI Account ────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2
   name: 'text-embedding-3-small'
   sku: {
     name: 'Standard'
-    capacity: environment == 'prod' ? 120 : 30
+    capacity: environment == 'prod' ? 50 : 10
   }
   properties: {
     model: {
