@@ -206,7 +206,7 @@ export default function HomePage() {
     <div className={styles.container}>
       <div className={styles.header}>
         <DatabaseArrowRight24Regular />
-        <Title1 style={{ flex: 1 }}>DA-MACAÉ</Title1>
+        <Title1 style={{ flex: 1 }}>AGENTRA</Title1>
         <Button
           icon={<History24Regular />}
           appearance="subtle"
