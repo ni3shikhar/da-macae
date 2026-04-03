@@ -21,7 +21,7 @@ import structlog
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 
-from .doc_generator import generate_and_upload_documents
+from .doc_generator import generate_documents_with_summary
 
 logger = structlog.get_logger(__name__)
 
@@ -224,14 +224,16 @@ async def run_agent_with_openai(
                             final_text, blob_uploads,
                         )
                     # Auto-generate Word/Excel documents from report output
+                    # Show summary in chat, full details in document
                     try:
-                        doc_uploads = await generate_and_upload_documents(
+                        doc_result = await generate_documents_with_summary(
                             final_text, agent_name, subtask_label=subtask_label,
                         )
-                        if doc_uploads:
-                            blob_uploads.extend(doc_uploads)
+                        if doc_result:
+                            blob_uploads.extend(doc_result.uploads)
+                            # Replace full text with summary + download links
                             final_text = _append_blob_uploads(
-                                final_text, doc_uploads,
+                                doc_result.summary, doc_result.uploads,
                             )
                     except Exception:
                         logger.exception("openai_doc_gen_failed", agent=agent_name)
@@ -355,13 +357,15 @@ async def run_agent_with_openai(
                         final_text, blob_uploads,
                     )
                 # Auto-generate Word/Excel documents from report output
+                # Show summary in chat, full details in document
                 try:
-                    doc_uploads = await generate_and_upload_documents(
+                    doc_result = await generate_documents_with_summary(
                         final_text, agent_name, subtask_label=subtask_label,
                     )
-                    if doc_uploads:
+                    if doc_result:
+                        # Replace full text with summary + download links
                         final_text = _append_blob_uploads(
-                            final_text, doc_uploads,
+                            doc_result.summary, doc_result.uploads,
                         )
                 except Exception:
                     logger.exception("openai_doc_gen_failed", agent=agent_name)

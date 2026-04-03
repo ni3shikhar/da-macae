@@ -5,6 +5,9 @@ generates a downloadable Word (.docx) or Excel (.xlsx) document, then
 uploads it to Azure Blob Storage (Azurite in dev).  The upload result
 JSON is returned so callers can append it to the agent output and the
 frontend will render a download card automatically.
+
+Also provides summary generation to show condensed output in chat while
+keeping full details in the document.
 """
 
 from __future__ import annotations
@@ -13,12 +16,21 @@ import io
 import json
 import os
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+
+@dataclass
+class DocumentResult:
+    """Result of document generation with summary for chat display."""
+    summary: str  # Condensed version for chat window
+    full_text: str  # Original detailed text (stored in document)
+    uploads: list[str]  # Blob upload JSON strings
 
 # ── Minimum content length to trigger document generation ───────────
 _MIN_REPORT_LENGTH = 300
@@ -68,6 +80,96 @@ def _has_significant_tables(text: str) -> bool:
         if len(data_rows) >= 4:  # header + 3 data rows
             return True
     return False
+
+
+# ── Summary Generation ──────────────────────────────────────────────
+
+def _generate_summary(text: str, agent_name: str, subtask_label: str | None = None) -> str:
+    """Generate a condensed summary from detailed agent output for chat display.
+    
+    Extracts:
+    - Main headings (## level)
+    - Key findings/metrics (numbers, percentages)
+    - Table row counts instead of full tables
+    - First sentence of each major section
+    """
+    lines = text.split("\n")
+    summary_parts: list[str] = []
+    
+    # Title
+    title = subtask_label or agent_name
+    summary_parts.append(f"## {title} - Summary\n")
+    
+    # Extract main headings and first meaningful line after each
+    current_section: str | None = None
+    section_first_line: str | None = None
+    tables_found = 0
+    table_rows_total = 0
+    
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        
+        # Skip blob upload JSON
+        if line.startswith("{") and '"status":"uploaded"' in line:
+            i += 1
+            continue
+        
+        # Level 2 heading - main section
+        if line.startswith("## ") and not line.startswith("###"):
+            # Save previous section summary
+            if current_section and section_first_line:
+                summary_parts.append(f"**{current_section}**: {section_first_line}")
+            current_section = line[3:].strip()
+            section_first_line = None
+            i += 1
+            continue
+        
+        # Capture first meaningful line of section
+        if current_section and not section_first_line and line and not line.startswith("#"):
+            # Skip table lines, capture text
+            if not line.startswith("|"):
+                # Truncate long lines
+                if len(line) > 150:
+                    line = line[:147] + "..."
+                section_first_line = line
+        
+        # Count tables instead of including them
+        if line.startswith("|") and i + 1 < len(lines):
+            table_start = i
+            row_count = 0
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                if not re.match(r"^\|[\s:-]+\|$", lines[i].strip()):
+                    row_count += 1
+                i += 1
+            tables_found += 1
+            table_rows_total += row_count - 1  # Exclude header
+            continue
+        
+        i += 1
+    
+    # Add last section
+    if current_section and section_first_line:
+        summary_parts.append(f"**{current_section}**: {section_first_line}")
+    
+    # Extract key metrics (numbers with context)
+    metrics = re.findall(
+        r"(?:total|count|found|identified|analyzed|processed|risk|score)[:\s]+(\d+(?:,\d+)*(?:\.\d+)?%?)",
+        text,
+        re.IGNORECASE,
+    )
+    if metrics:
+        unique_metrics = list(dict.fromkeys(metrics[:5]))  # First 5 unique
+        summary_parts.append(f"\n**Key Metrics**: {', '.join(unique_metrics)}")
+    
+    # Table summary
+    if tables_found > 0:
+        summary_parts.append(f"\n**Data**: {tables_found} table(s) with {table_rows_total} total rows")
+    
+    # Footer pointing to document
+    summary_parts.append("\n---\n*📄 Full details available in the attached document(s).*")
+    
+    return "\n".join(summary_parts)
 
 
 # ── Word Document Generation ────────────────────────────────────────
@@ -426,3 +528,39 @@ async def generate_and_upload_documents(
             logger.exception("doc_generator_excel_failed", agent=agent_name)
 
     return results
+
+
+async def generate_documents_with_summary(
+    text: str,
+    agent_name: str,
+    container: str = "migration-reports",
+    subtask_label: str | None = None,
+) -> DocumentResult | None:
+    """Generate documents and return a summary for chat display.
+
+    Returns a DocumentResult containing:
+    - **summary**: Condensed version for chat window display
+    - **full_text**: Original detailed text (preserved in document)
+    - **uploads**: Blob upload JSON strings for download cards
+
+    Returns None if the text doesn't look like a report worth exporting.
+    """
+    if not _looks_like_report(text, agent_name):
+        return None
+
+    # Generate uploads using existing function logic
+    uploads = await generate_and_upload_documents(
+        text, agent_name, container, subtask_label
+    )
+
+    if not uploads:
+        return None
+
+    # Generate condensed summary for chat
+    summary = _generate_summary(text, agent_name, subtask_label)
+
+    return DocumentResult(
+        summary=summary,
+        full_text=text,
+        uploads=uploads,
+    )
