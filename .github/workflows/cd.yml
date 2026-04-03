@@ -157,9 +157,9 @@ jobs:
           azd env new ${{ needs.setup.outputs.environment }} || true
           azd env select ${{ needs.setup.outputs.environment }}
           azd env set AZURE_LOCATION "${{ vars.AZURE_LOCATION }}"
-          azd env set adminObjectId "${{ steps.admin.outputs.object_id }}"
-          azd env set environment "${{ needs.setup.outputs.environment }}"
-          azd env set projectName "damacae"
+          azd env config set infra.parameters.adminObjectId "${{ steps.admin.outputs.object_id }}"
+          azd env config set infra.parameters.environment "${{ needs.setup.outputs.environment }}"
+          azd env config set infra.parameters.projectName "damacae"
 
           azd provision --no-prompt
 
@@ -254,9 +254,9 @@ jobs:
           azd env new prod || true
           azd env select prod
           azd env set AZURE_LOCATION "${{ vars.AZURE_LOCATION }}"
-          azd env set adminObjectId "${{ secrets.ADMIN_OBJECT_ID }}"
-          azd env set environment "prod"
-          azd env set projectName "damacae"
+          azd env config set infra.parameters.adminObjectId "${{ secrets.ADMIN_OBJECT_ID }}"
+          azd env config set infra.parameters.environment "prod"
+          azd env config set infra.parameters.projectName "damacae"
 
           azd provision --no-prompt
           azd deploy --no-prompt
