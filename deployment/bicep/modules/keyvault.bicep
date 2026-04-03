@@ -20,10 +20,13 @@ param adminObjectId string
 @description('Resource tags')
 param tags object
 
-// ── Naming ──────────────────────────────────────────────────────────────────
+@description('Unique suffix to avoid naming conflicts')
+param uniqueSuffix string
+
+// ── Naming ────────────────────────────────────────────────────────────────
 
 var envSuffix = environment == 'prod' ? '' : '-${environment}'
-var keyVaultName = '${projectName}-kv${envSuffix}'
+var keyVaultName = '${projectName}-kv-${uniqueSuffix}${envSuffix}'
 
 // ── Key Vault ───────────────────────────────────────────────────────────────
 

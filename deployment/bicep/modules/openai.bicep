@@ -23,10 +23,13 @@ param keyVaultName string
 @description('Resource tags')
 param tags object
 
-// ── Naming ──────────────────────────────────────────────────────────────────
+@description('Unique suffix to avoid naming conflicts')
+param uniqueSuffix string
+
+// ── Naming ────────────────────────────────────────────────────────────────
 
 var envSuffix = environment == 'prod' ? '' : '-${environment}'
-var openAiName = '${projectName}-openai${envSuffix}'
+var openAiName = '${projectName}-oai-${uniqueSuffix}${envSuffix}'
 
 // ── Configuration per environment ───────────────────────────────────────────
 

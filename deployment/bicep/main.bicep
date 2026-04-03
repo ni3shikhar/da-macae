@@ -35,6 +35,8 @@ param tags object = {
 
 // ── Naming Convention ───────────────────────────────────────────────────────
 
+// Unique suffix derived from subscription ID to avoid soft-delete name conflicts
+var uniqueSuffix = substring(uniqueString(subscription().subscriptionId, projectName), 0, 5)
 var envSuffix = environment == 'prod' ? '' : '-${environment}'
 var rgName = '${projectName}-rg${envSuffix}'
 
@@ -69,6 +71,7 @@ module keyVault 'modules/keyvault.bicep' = {
     environment: environment
     location: location
     adminObjectId: adminObjectId
+    uniqueSuffix: uniqueSuffix
     tags: tags
   }
 }
@@ -126,6 +129,7 @@ module openAi 'modules/openai.bicep' = {
     location: location
     modelDeployment: openAiModelDeployment
     keyVaultName: keyVault.outputs.name
+    uniqueSuffix: uniqueSuffix
     tags: tags
   }
 }
