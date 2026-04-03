@@ -135,7 +135,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Install Azure Developer CLI
-        uses: Azure/setup-azd@v1
+        uses: Azure/setup-azd@v2
 
       - name: Get admin object ID
         id: admin
@@ -183,7 +183,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Install Azure Developer CLI
-        uses: Azure/setup-azd@v1
+        uses: Azure/setup-azd@v2
 
       - name: AZD Deploy
         env:
@@ -237,7 +237,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Install Azure Developer CLI
-        uses: Azure/setup-azd@v1
+        uses: Azure/setup-azd@v2
 
       - name: Deploy to Production
         env:
