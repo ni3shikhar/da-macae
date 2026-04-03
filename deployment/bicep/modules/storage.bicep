@@ -67,10 +67,6 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     }
     // ADLS Gen2: hierarchical namespace required for Data Lake tools
     isHnsEnabled: true
-    deleteRetentionPolicy: {
-      enabled: true
-      days: environment == 'prod' ? 30 : 7
-    }
   }
 }
 

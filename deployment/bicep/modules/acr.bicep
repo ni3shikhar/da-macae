@@ -17,10 +17,13 @@ param location string
 @description('Resource tags')
 param tags object
 
-// ── Naming ──────────────────────────────────────────────────────────────────
+@description('Unique suffix to avoid naming conflicts')
+param uniqueSuffix string
+
+// ── Naming ────────────────────────────────────────────────────────────────
 
 // ACR names must be alphanumeric only, globally unique
-var acrName = '${projectName}acr'
+var acrName = '${projectName}acr${uniqueSuffix}'
 
 // ── Configuration per environment ───────────────────────────────────────────
 

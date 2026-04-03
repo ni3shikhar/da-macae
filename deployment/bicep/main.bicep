@@ -143,6 +143,7 @@ module acr 'modules/acr.bicep' = {
     projectName: projectName
     environment: environment
     location: location
+    uniqueSuffix: uniqueSuffix
     tags: tags
   }
 }

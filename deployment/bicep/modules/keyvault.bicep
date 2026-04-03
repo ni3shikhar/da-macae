@@ -66,7 +66,7 @@ resource adminRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '00482a5a-887f-4fb3-b363-3b7fe8e74483')
     principalId: adminObjectId
-    principalType: 'User'
+    principalType: 'ServicePrincipal'
   }
 }
 
