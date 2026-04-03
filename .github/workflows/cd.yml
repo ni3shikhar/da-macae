@@ -223,7 +223,9 @@ jobs:
             --federated-credential-provider "github" \
             --tenant-id "${{ secrets.AZURE_TENANT_ID }}"
 
+          azd env new ${{ needs.setup.outputs.environment }} || true
           azd env select ${{ needs.setup.outputs.environment }}
+          azd env set AZURE_LOCATION "${{ vars.AZURE_LOCATION }}"
           azd deploy --no-prompt
 
       - name: Get endpoints
