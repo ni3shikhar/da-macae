@@ -175,18 +175,17 @@ module adf 'modules/adf.bicep' = {
   }
 }
 
-// ── AKS Cluster ─────────────────────────────────────────────────────────────
+// ── Container Apps ───────────────────────────────────────────────────────────
 
-module aks 'modules/aks.bicep' = {
-  name: 'aks-${environment}'
+module containerApps 'modules/container-apps.bicep' = {
+  name: 'container-apps-${environment}'
   scope: rg
   params: {
     projectName: projectName
     environment: environment
     location: location
-    adminObjectId: adminObjectId
-    acrId: acr.outputs.id
-    logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
+    acrLoginServer: acr.outputs.loginServer
+    logAnalyticsWorkspaceName: monitoring.outputs.logAnalyticsWorkspaceName
     tags: tags
   }
 }
@@ -194,7 +193,6 @@ module aks 'modules/aks.bicep' = {
 // ── Outputs ─────────────────────────────────────────────────────────────────
 
 output resourceGroupName string = rg.name
-output aksClusterName string = aks.outputs.clusterName
 output acrLoginServer string = acr.outputs.loginServer
 output keyVaultName string = keyVault.outputs.name
 output cosmosDbEndpoint string = cosmosDb.outputs.endpoint
@@ -205,3 +203,4 @@ output storageBlobEndpoint string = storage.outputs.primaryBlobEndpoint
 output storageDfsEndpoint string = storage.outputs.primaryDfsEndpoint
 output storageAccountName string = storage.outputs.name
 output dataFactoryName string = adf.outputs.name
+output frontendUrl string = containerApps.outputs.frontendFqdn
