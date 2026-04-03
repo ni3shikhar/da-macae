@@ -129,6 +129,13 @@ jobs:
           echo "login_server=${ACR_SERVER}" >> $GITHUB_OUTPUT
           echo "::notice::ACR: ${ACR_NAME} (${ACR_SERVER})"
 
+      - name: Upload AZD environment state
+        uses: actions/upload-artifact@v4
+        with:
+          name: azd-env-${{ needs.setup.outputs.environment }}
+          path: .azure/
+          retention-days: 1
+
   # ── Step 2: Build & Push Container Images ──────────────────────────────────
   # Runs AFTER infra so ACR exists to receive images
   build-push:
@@ -212,6 +219,12 @@ jobs:
       - name: Install Azure Developer CLI
         uses: Azure/setup-azd@v2
 
+      - name: Download AZD environment state
+        uses: actions/download-artifact@v4
+        with:
+          name: azd-env-${{ needs.setup.outputs.environment }}
+          path: .azure/
+
       - name: AZD Deploy
         env:
           AZURE_ENV_NAME: ${{ needs.setup.outputs.environment }}
@@ -223,9 +236,7 @@ jobs:
             --federated-credential-provider "github" \
             --tenant-id "${{ secrets.AZURE_TENANT_ID }}"
 
-          azd env new ${{ needs.setup.outputs.environment }} || true
           azd env select ${{ needs.setup.outputs.environment }}
-          azd env set AZURE_LOCATION "${{ vars.AZURE_LOCATION }}"
           azd deploy --no-prompt
 
       - name: Get endpoints
