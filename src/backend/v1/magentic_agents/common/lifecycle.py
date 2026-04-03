@@ -369,14 +369,18 @@ class AzureAgentBase:
         *,
         thread_id: str | None = None,
         on_progress: Any | None = None,
-    ) -> str:
+        subtask_label: str | None = None,
+    ) -> dict[str, Any]:
         """Run the agent with a task and return the response.
+
+        Returns a dict: {"text": str, "usage": {"prompt_tokens": int, ...}}.
 
         Execution modes (in priority order):
         1. Azure AI Foundry (project_client available)
         2. Azure OpenAI + MCP tools (openai_client available)
         3. Simulated output (fallback for offline dev)
         """
+        _empty_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "llm_calls": 0}
         if self._project_client is None:
             # ── Mode 2a: Anthropic Claude + MCP tool calling ───────
             if self._anthropic_client and self._mcp_server_url:
@@ -388,7 +392,7 @@ class AzureAgentBase:
                     tools_count=len(self._mcp_tool_names),
                     task=task[:200],
                 )
-                return await run_agent_with_claude(
+                return await run_agent_with_claude(  # returns dict
                     anthropic_client=self._anthropic_client,
                     model=claude_model,
                     system_prompt=self.instructions,
@@ -397,6 +401,7 @@ class AzureAgentBase:
                     tool_names=self._mcp_tool_names,
                     agent_name=self.name,
                     on_progress=on_progress,
+                    subtask_label=subtask_label,
                 )
 
             # ── Mode 2b: Azure OpenAI + MCP tool calling ──────────
@@ -408,7 +413,7 @@ class AzureAgentBase:
                     tools_count=len(self._mcp_tool_names),
                     task=task[:200],
                 )
-                return await run_agent_with_openai(
+                return await run_agent_with_openai(  # returns dict
                     openai_client=self._openai_client,
                     model=self.model,
                     system_prompt=self.instructions,
@@ -417,6 +422,7 @@ class AzureAgentBase:
                     tool_names=self._mcp_tool_names,
                     agent_name=self.name,
                     on_progress=on_progress,
+                    subtask_label=subtask_label,
                 )
 
             # ── Mode 3: Simulated (no clients available) ───────────
@@ -432,8 +438,8 @@ class AzureAgentBase:
 
             simulated = _SIMULATED_OUTPUTS.get(self.name)
             if simulated:
-                return f"[SIMULATED] {simulated}"
-            return f"[SIMULATED] [{self.name}] Task completed: {task[:200]}"
+                return {"text": f"[SIMULATED] {simulated}", "usage": _empty_usage}
+            return {"text": f"[SIMULATED] [{self.name}] Task completed: {task[:200]}", "usage": _empty_usage}
 
         try:
             # _project_client is an AgentsClient directly (v2 SDK)
@@ -463,7 +469,7 @@ class AzureAgentBase:
                     name=self.name,
                     error=run.last_error,
                 )
-                return f"Agent {self.name} failed: {run.last_error}"
+                return {"text": f"Agent {self.name} failed: {run.last_error}", "usage": _empty_usage}
 
             # Get the last assistant message (v2 SDK helper)
             from azure.ai.agents.models import MessageRole
@@ -472,7 +478,14 @@ class AzureAgentBase:
                 thread_id=thread_id,
                 role=MessageRole.AGENT,
             )
-            return last_msg.text if last_msg else ""
+            # Azure AI Foundry SDK exposes usage via run.usage
+            foundry_usage = _empty_usage.copy()
+            if hasattr(run, 'usage') and run.usage:
+                foundry_usage["prompt_tokens"] = getattr(run.usage, 'prompt_tokens', 0) or 0
+                foundry_usage["completion_tokens"] = getattr(run.usage, 'completion_tokens', 0) or 0
+                foundry_usage["total_tokens"] = foundry_usage["prompt_tokens"] + foundry_usage["completion_tokens"]
+                foundry_usage["llm_calls"] = 1
+            return {"text": last_msg.text if last_msg else "", "usage": foundry_usage}
         except Exception:
             logger.exception("agent_run_error", name=self.name)
             raise

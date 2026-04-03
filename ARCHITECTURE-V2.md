@@ -74,14 +74,19 @@ complex database migration tasks.
 │                                                                   │
 ├─────────────────────────────────────────────────────────────────┤
 │                     MCP Server (FastMCP)                          │
-│  ┌─────────────┐ ┌──────────────┐ ┌───────────────────────────┐ │
-│  │ SQL Server   │ │ PostgreSQL   │ │ Azure Storage              │ │
-│  │ Tools        │ │ Tools        │ │ Tools                      │ │
-│  ├─────────────┤ ├──────────────┤ ├───────────────────────────┤ │
-│  │ Schema Disc. │ │ Schema Disc. │ │ Blob Upload/Download       │ │
-│  │ Query Exec   │ │ Query Exec   │ │ Container Mgmt             │ │
-│  │ Data Profile │ │ Data Profile │ │ Migration Artifact Storage │ │
-│  └─────────────┘ └──────────────┘ └───────────────────────────┘ │
+│  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐ │
+│  │ Database Tools    │ │ Cloud Storage     │ │ Pipeline Tools   │ │
+│  ├──────────────────┤ ├──────────────────┤ ├──────────────────┤ │
+│  │ SQL Server        │ │ Azure Blob        │ │ ADF Linked Svc   │ │
+│  │ PostgreSQL        │ │ ADLS Gen2         │ │ Synapse          │ │
+│  │ MySQL/MariaDB     │ │ CSV/Parquet/JSON  │ │ Fabric           │ │
+│  │ Oracle            │ │                    │ │                  │ │
+│  │ MongoDB           │ │ Security Tools     │ │ Transformation   │ │
+│  │ Cosmos DB         │ ├──────────────────┤ │ Templates        │ │
+│  │ Snowflake         │ │ Security Scan      │ │                  │ │
+│  │ Databricks SQL    │ │ Report Generator   │ │                  │ │
+│  │ BigQuery          │ │                    │ │                  │ │
+│  └──────────────────┘ └──────────────────┘ └──────────────────┘ │
 ├─────────────────────────────────────────────────────────────────┤
 │                     Data Layer                                    │
 │  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────────┐ │
@@ -106,45 +111,37 @@ da-macae/
 │   ├── backend/                          # Python FastAPI backend
 │   │   ├── app.py                        # FastAPI entry point
 │   │   ├── requirements.txt              # Python dependencies
-│   │   ├── Dockerfile                    # Backend container
 │   │   ├── common/                       # Shared utilities
 │   │   │   ├── config/
 │   │   │   │   └── app_config.py         # Environment-based configuration
 │   │   │   ├── database/
 │   │   │   │   ├── database_base.py      # Abstract database interface
 │   │   │   │   ├── database_factory.py   # Database provider factory
-│   │   │   │   └── cosmosdb.py           # Cosmos DB implementation
+│   │   │   │   ├── cosmosdb.py           # Cosmos DB implementation
+│   │   │   │   └── in_memory.py          # In-memory DB for local dev
 │   │   │   ├── models/
 │   │   │   │   └── messages.py           # Pydantic data models
 │   │   │   └── utils/
 │   │   │       └── utils.py              # RAI validation, team helpers
-│   │   ├── auth/
-│   │   │   └── auth_utils.py             # Authentication helpers
 │   │   └── v1/                           # API version 1
 │   │       ├── api/
 │   │       │   └── router.py             # FastAPI route handlers
-│   │       ├── callbacks/
-│   │       │   └── response_handlers.py  # Agent response callbacks
 │   │       ├── config/
-│   │       │   ├── settings.py           # Orchestration settings
 │   │       │   └── agent_registry.py     # Global agent registry
 │   │       ├── common/
 │   │       │   └── services/
-│   │       │       ├── team_service.py    # Team configuration CRUD
-│   │       │       ├── agents_service.py  # Agent descriptor builder
-│   │       │       └── foundry_service.py # Azure AI Foundry helper
+│   │       │       └── team_service.py   # Team configuration CRUD
 │   │       ├── magentic_agents/          # Agent implementations
 │   │       │   ├── foundry_agent.py      # FoundryAgentTemplate
 │   │       │   ├── proxy_agent.py        # Human clarification proxy
 │   │       │   ├── magentic_agent_factory.py  # Dynamic agent creation
 │   │       │   ├── common/
-│   │       │   │   └── lifecycle.py      # AzureAgentBase lifecycle
+│   │       │   │   ├── lifecycle.py           # AzureAgentBase lifecycle
+│   │       │   │   ├── claude_mcp_runner.py   # Claude MCP tool runner
+│   │       │   │   ├── openai_mcp_runner.py   # OpenAI MCP tool runner
+│   │       │   │   └── doc_generator.py       # Documentation generator
 │   │       │   └── models/
 │   │       │       └── agent_models.py   # MCPConfig, SearchConfig
-│   │       ├── models/
-│   │       │   ├── models.py             # MPlan, MStep
-│   │       │   ├── messages.py           # WebSocket message types
-│   │       │   └── orchestration_models.py  # Planner response models
 │   │       └── orchestration/
 │   │           ├── orchestration_manager.py   # Magentic workflow manager
 │   │           ├── human_approval_manager.py  # Plan approval workflow
@@ -152,8 +149,7 @@ da-macae/
 │   │               └── plan_to_mplan_converter.py  # Plan text parser
 │   │
 │   ├── frontend/                         # React + TypeScript frontend
-│   │   ├── frontend_server.py            # Static file server
-│   │   ├── Dockerfile                    # Frontend container
+│   │   ├── index.html
 │   │   ├── package.json
 │   │   ├── vite.config.ts
 │   │   ├── tsconfig.json
@@ -167,61 +163,58 @@ da-macae/
 │   │       │   ├── index.tsx             # Model exports
 │   │       │   ├── enums.tsx             # Agent types, plan status
 │   │       │   ├── Team.tsx              # Agent, Team, TeamConfig
-│   │       │   ├── plan.tsx              # Plan, MPlan, Step models
-│   │       │   └── messages.tsx          # WebSocket messages
+│   │       │   └── plan.tsx              # Plan, MPlan, Step models
 │   │       ├── services/
-│   │       │   ├── PlanDataService.tsx   # Plan data processing
-│   │       │   ├── TaskService.tsx       # Task operations
 │   │       │   └── WebSocketService.tsx  # WebSocket manager
 │   │       ├── pages/
 │   │       │   ├── HomePage.tsx          # Team selection + task input
-│   │       │   └── PlanPage.tsx          # Plan view + chat + execution
+│   │       │   ├── PlanPage.tsx          # Plan view + chat + execution
+│   │       │   └── HistoryPage.tsx       # Plan history view
 │   │       └── components/
-│   │           ├── content/
-│   │           │   ├── PlanChat.tsx       # Chat interface
-│   │           │   ├── PlanPanelLeft.tsx  # Navigation sidebar
-│   │           │   └── PlanPanelRight.tsx # Plan details
-│   │           └── toast/
-│   │               └── InlineToaster.tsx  # Notifications
+│   │           └── FormattedContent.tsx  # Markdown/content rendering
 │   │
-│   ├── mcp_server/                       # Model Context Protocol server
-│   │   ├── mcp_server.py                 # FastMCP entry point
-│   │   ├── requirements.txt
-│   │   ├── Dockerfile
-│   │   ├── core/
-│   │   │   └── factory.py               # MCP tool factory
-│   │   ├── services/
-│   │   │   ├── sqlserver_service.py      # SQL Server tools
-│   │   │   ├── postgresql_service.py     # PostgreSQL tools
-│   │   │   ├── storage_service.py        # Azure Storage tools
-│   │   │   └── migration_service.py      # Migration-specific tools
-│   │   └── config/
-│   │       └── settings.py               # MCP server settings
-│   │
-│   └── tests/
-│       ├── backend/                      # Backend unit tests
-│       ├── frontend/                     # Frontend tests
-│       └── e2e/                          # End-to-end tests
+│   └── mcp_server/                       # Model Context Protocol server
+│       ├── server.py                     # FastMCP entry point
+│       ├── requirements.txt
+│       ├── linked_service_templates.py   # ADF linked service templates
+│       ├── security_assessment_tools.py  # Security scanning tools
+│       ├── security_excel_generator.py   # Security report generator
+│       └── transformation_templates.py   # Data transformation templates
 │
 ├── data/
-│   └── agent_teams/                      # Pre-built team JSON configs
-│       ├── migration_team.json           # Data migration team (8 agents)
-│       ├── data_quality_team.json        # Data quality assessment team
-│       └── schema_analysis_team.json     # Schema analysis team
+│   ├── agent_teams/                      # Pre-built team JSON configs
+│   │   ├── migration_team.json           # Data migration team
+│   │   └── security_assessment_team.json # Security assessment team
+│   └── seed/                             # Seed data for local dev
 │
-├── infra/                                # Azure infrastructure (Bicep)
-│   ├── main.bicep                        # Main deployment
-│   ├── abbreviations.json
-│   └── modules/
-│       ├── acr.bicep                     # Container Registry
-│       ├── aks.bicep                     # Container Apps
-│       ├── cosmosdb.bicep                # Cosmos DB
-│       ├── keyvault.bicep                # Key Vault
-│       ├── monitoring.bicep              # Application Insights
-│       ├── openai.bicep                  # Azure OpenAI
-│       └── storage.bicep                 # Storage Account
+├── deployment/                           # Azure infrastructure
+│   ├── bicep/
+│   │   ├── main.bicep                    # Main deployment
+│   │   ├── main.json                     # ARM template output
+│   │   ├── modules/
+│   │   │   ├── acr.bicep                 # Container Registry
+│   │   │   ├── adf.bicep                 # Azure Data Factory
+│   │   │   ├── aks.bicep                 # Container Apps
+│   │   │   ├── appconfig.bicep           # App Configuration
+│   │   │   ├── cosmosdb.bicep            # Cosmos DB
+│   │   │   ├── keyvault.bicep            # Key Vault
+│   │   │   ├── monitoring.bicep          # Application Insights
+│   │   │   ├── openai.bicep              # Azure OpenAI
+│   │   │   ├── servicebus.bicep          # Service Bus
+│   │   │   └── storage.bicep             # Storage Account
+│   │   └── parameters/
+│   │       ├── dev.bicepparam            # Development parameters
+│   │       ├── staging.bicepparam        # Staging parameters
+│   │       └── prod.bicepparam           # Production parameters
+│   ├── container-apps/
+│   │   └── main.bicep                    # Container Apps deployment
+│   └── kubernetes/                       # K8s deployment (future)
+│
+├── docs/
+│   └── examples/                         # Usage examples
 │
 ├── docker-compose.yml                    # Local development
+├── Dockerfile                            # Root container definition
 ├── azure.yaml                            # Azure Developer CLI config
 └── README.md
 ```
@@ -380,7 +373,7 @@ Messages between frontend and backend use typed JSON:
 docker compose up -d              # Start all services
 cd src/backend && uv run uvicorn app:app --port 8000
 cd src/frontend && npm run dev    # Vite dev server on :3001
-cd src/mcp_server && uv run python mcp_server.py  # MCP on :8100
+cd src/mcp_server && uv run python server.py      # MCP on :8100
 ```
 
 ### Azure Deployment
@@ -396,5 +389,8 @@ azd up                            # Deploy all resources via Bicep
 - **Azure AI Search** — RAG indexes
 - **Azure AI Foundry** — Agent management
 - **Azure Container Registry** — Container images
+- **Azure Data Factory** — Data pipeline orchestration
+- **Azure Service Bus** — Async messaging
+- **Azure App Configuration** — Feature flags, settings
 - **Azure Key Vault** — Secrets
 - **Azure Monitor** — Telemetry + Application Insights

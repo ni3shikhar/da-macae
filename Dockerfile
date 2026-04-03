@@ -87,6 +87,18 @@ server {
         proxy_send_timeout 86400s;
     }
 
+    # Cache-bust index.html so new deploys are picked up immediately
+    location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        add_header Pragma "no-cache";
+        add_header Expires "0";
+    }
+
+    # Hashed assets can be cached forever
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
     # SPA fallback
     location / {
         try_files $uri $uri/ /index.html;

@@ -55,3 +55,38 @@ azure-mgmt-policyinsights>=1.0.0
 
 # Synapse Analytics (artifacts client for linked-service management)
 azure-synapse-artifacts>=0.18.0
+
+# ── Security Assessment Tools ────────────────────────────────────────
+# Network Security (NSGs, firewalls, virtual networks)
+azure-mgmt-network>=25.0.0
+
+# Compute Management (VMs, VM scale sets)
+azure-mgmt-compute>=30.0.0
+
+# Azure Security Center / Defender for Cloud
+azure-mgmt-security>=6.0.0
+
+# Role-Based Access Control (RBAC)
+azure-mgmt-authorization>=4.0.0
+
+# Backup and Recovery Services
+azure-mgmt-recoveryservices>=2.0.0
+azure-mgmt-recoveryservicesbackup>=7.0.0
+
+# Web Apps / App Service
+azure-mgmt-web>=7.0.0
+
+# Azure Kubernetes Service (AKS)
+azure-mgmt-containerservice>=30.0.0
+
+# Subscription management
+azure-mgmt-subscription>=3.0.0
+
+# Azure Monitor (logging, diagnostics)
+azure-mgmt-monitor>=6.0.0
+
+# Log Analytics Workspace
+azure-mgmt-loganalytics>=13.0.0
+
+# Excel report generation
+openpyxl>=3.1.0

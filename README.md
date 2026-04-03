@@ -15,10 +15,54 @@ DA-MACAÉ v2 uses Azure AI Foundry's Agent Framework, Azure OpenAI, and speciali
 - **Multi-agent orchestration** — 8+ specialist agents (Discovery, Analysis, Mapping, Transformation, Pipeline, Data Quality, Infrastructure, Reporting)
 - **Human-in-the-loop** — Plan approval gates and ProxyAgent for clarification
 - **Real-time streaming** — WebSocket-based updates to the UI
-- **MCP tools** — Model Context Protocol server for database introspection (SQL Server, PostgreSQL, MySQL, MongoDB, Cosmos DB, Snowflake, BigQuery, Databricks)
+- **MCP tools** — Model Context Protocol server for database introspection and pipeline management (SQL Server, PostgreSQL, MySQL, Oracle, MongoDB, Cosmos DB, Snowflake, BigQuery, Databricks, ADLS Gen2, CSV/Parquet/JSON, Azure Blob Storage) plus Azure Data Factory and Synapse Analytics pipeline tools
+- **Security assessment** — MCSB v2 cloud security benchmark assessment team with 13 domain-specialist agents producing Excel reports
 - **Responsible AI** — RAI validation before execution
 - **Dynamic team configuration** — JSON-based team definitions with agent customization
 - **Azure-native deployment** — Container Apps, Cosmos DB, AI Foundry, OpenAI
+
+---
+
+## Agent Teams
+
+Two pre-built team configurations are included in `data/agent_teams/`:
+
+### Data Migration Team (`migration_team.json`)
+
+End-to-end migration across all supported data sources — 8 specialist agents:
+
+| Agent | Responsibility |
+|-------|----------------|
+| `DiscoveryAgent` | Schema discovery, row counts, data profiling across all sources |
+| `AnalysisAgent` | Data quality analysis and source/target compatibility assessment |
+| `MappingAgent` | Schema mapping between source and target |
+| `TransformationAgent` | DDL generation and data type conversion scripts |
+| `PipelineAgent` | ADF / Synapse / Microsoft Fabric pipeline generation |
+| `DataQualityAgent` | Post-migration validation and row-count reconciliation |
+| `InfrastructureAgent` | Target infrastructure provisioning (databases, schemas) |
+| `ReportingAgent` | Final migration summary, timelines, and recommendations |
+
+### Cloud Security Assessment Team (`security_assessment_team.json`)
+
+Microsoft Cloud Security Benchmark (MCSB) v2 Azure subscription assessment — 13 specialist agents:
+
+| Agent | MCSB Domain |
+|-------|-------------|
+| `SecurityCoordinatorAgent` | Orchestration + Executive Summary |
+| `NetworkSecurityAgent` | NS — Network Security |
+| `IdentityManagementAgent` | IM — Identity Management |
+| `DataProtectionAgent` | DP — Data Protection |
+| `PrivilegedAccessAgent` | PA — Privileged Access |
+| `AssetManagementAgent` | AM — Asset Management |
+| `LoggingDetectionAgent` | LT — Logging & Threat Detection |
+| `IncidentResponseAgent` | IR — Incident Response |
+| `PostureVulnMgmtAgent` | PV — Posture & Vulnerability Management |
+| `EndpointSecurityAgent` | ES — Endpoint Security |
+| `BackupRecoveryAgent` | BR — Backup & Recovery |
+| `DevOpsSecurityAgent` | DS — DevOps Security |
+| `GovernanceStrategyAgent` | GS — Governance & Strategy |
+
+Outputs a comprehensive Excel report with per-control findings, severity ratings (Critical/High/Medium/Low), recommendations, and MCSB control mappings.
 
 ---
 
@@ -29,8 +73,9 @@ DA-MACAÉ v2 uses Azure AI Foundry's Agent Framework, Azure OpenAI, and speciali
 | Backend | Python 3.12 · FastAPI · Uvicorn |
 | Frontend | React 18 · TypeScript · Vite · Fluent UI v9 |
 | AI | Azure OpenAI (GPT-4o) · Azure AI Foundry · Anthropic Claude |
-| Database | Azure Cosmos DB (NoSQL) / In-Memory |
-| MCP Server | FastMCP (Python) |
+| Session Store | Azure Cosmos DB (NoSQL) / In-Memory |
+| Data Sources | SQL Server · PostgreSQL · MySQL · Oracle · MongoDB · Cosmos DB · Snowflake · Databricks · BigQuery · ADLS Gen2 · Azure Blob |
+| MCP Server | FastMCP (Python) — database tools + ADF/Synapse pipeline tools + MCSB security tools |
 | Observability | Azure Monitor · OpenTelemetry |
 | IaC | Bicep · Azure Developer CLI (`azd`) |
 | Containers | Docker · Docker Compose · Azure Container Apps |
@@ -129,7 +174,11 @@ da-macae/
 │   │   │   └── services/      # WebSocket service
 │   │   └── package.json
 │   └── mcp_server/            # MCP tool server
-│       └── server.py          # FastMCP entry point
+│       ├── server.py                    # FastMCP entry point (data source tools)
+│       ├── security_assessment_tools.py # MCSB v2 Azure security assessment tools
+│       ├── security_excel_generator.py  # Excel report generation for security findings
+│       ├── transformation_templates.py  # Data transformation and DDL helpers
+│       └── linked_service_templates.py  # ADF / Synapse linked service templates
 ├── data/agent_teams/          # Team configuration JSON files
 ├── deployment/
 │   ├── bicep/                 # Azure Bicep IaC modules
@@ -182,12 +231,26 @@ Key environment variables (configured in `docker-compose.yml` for local dev):
 | `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL |
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI API key |
 | `AZURE_OPENAI_CHAT_DEPLOYMENT` | Deployment name (e.g., `gpt-4o`) |
+| `AZURE_OPENAI_API_VERSION` | API version (default: `2024-12-01-preview`) |
 | `AZURE_AI_FOUNDRY_PROJECT_CONNECTION_STRING` | AI Foundry project connection |
 | `ANTHROPIC_API_KEY` | Anthropic Claude API key (alternative LLM) |
+| `ANTHROPIC_MODEL` | Claude model name (default: `claude-opus-4-20250514`) |
 | `DATABASE_BACKEND` | `cosmosdb` or `in_memory` (default: `in_memory`) |
 | `COSMOS_ENDPOINT` | Cosmos DB endpoint |
 | `COSMOS_KEY` | Cosmos DB key |
 | `MCP_SERVER_URL` | MCP server URL (default: `http://mcp-server:8001`) |
+| `SQLSERVER_DSN` | SQL Server ODBC connection string |
+| `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | PostgreSQL connection |
+| `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` | MySQL connection |
+| `ORACLE_DSN` / `ORACLE_USER` / `ORACLE_PASSWORD` | Oracle Database connection (optional) |
+| `MONGODB_URI` | MongoDB connection URI |
+| `SNOWFLAKE_ACCOUNT` / `SNOWFLAKE_USER` / `SNOWFLAKE_PASSWORD` | Snowflake connection (optional) |
+| `ADLS_ACCOUNT_NAME` / `ADLS_ACCOUNT_KEY` | Azure Data Lake Storage Gen2 (optional) |
+| `DATABRICKS_HOST` / `DATABRICKS_HTTP_PATH` / `DATABRICKS_TOKEN` | Databricks SQL (optional) |
+| `BIGQUERY_PROJECT` / `GOOGLE_APPLICATION_CREDENTIALS` | Google BigQuery (optional) |
+| `AZURE_SUBSCRIPTION_ID` | Azure subscription for ADF/Synapse/security tools |
+| `ADF_RESOURCE_GROUP` / `ADF_FACTORY_NAME` | Azure Data Factory (optional) |
+| `SYNAPSE_WORKSPACE_ENDPOINT` | Azure Synapse Analytics workspace (optional) |
 | `LOG_LEVEL` | Logging level (default: `INFO`) |
 
 ---

@@ -28,6 +28,7 @@ class AgentRunContext(BaseModel):
     previous_outputs: dict[str, str] = Field(default_factory=dict)
     thread_id: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    subtask_label: Optional[str] = None
 
 
 class AgentRunResult(BaseModel):
@@ -39,3 +40,7 @@ class AgentRunResult(BaseModel):
     error: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     duration_seconds: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    llm_calls: int = 0

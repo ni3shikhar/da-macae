@@ -593,6 +593,216 @@ async def storage_upload_blob(container: str, blob_name: str, content: str) -> s
     return json.dumps({"status": "uploaded", "container": container, "blob": blob_name})
 
 
+# ── Seed Data Loading Tools ──────────────────────────────────────────
+
+
+@mcp.tool()
+async def load_seed_data_sqlserver(
+    database: str,
+    seed_script: str,
+    platform: str = "sqlserver"
+) -> str:
+    """Load seed data into SQL Server by executing a SQL script.
+    
+    Args:
+        database: Target database name (e.g. 'source_db')
+        seed_script: One of: 'ecommerce' (default seed), 'custom' (provide SQL in next param),
+                     or the actual SQL script content to execute
+        platform: Target platform - 'sqlserver', 'azure_sql', 'synapse', 'fabric'
+                  This selects the appropriate seed script variant.
+    
+    Returns:
+        JSON with execution status and summary of tables created/populated.
+    """
+    # Pre-defined seed scripts
+    SEED_SCRIPTS = {
+        "ecommerce": {
+            "sqlserver": "/app/data/seed/init-sqlserver.sql",
+            "azure_sql": "/app/data/seed/init-azure-sql.sql",
+            "synapse": "/app/data/seed/init-synapse.sql",
+            "fabric": "/app/data/seed/init-fabric.sql",
+        }
+    }
+    
+    script_content = seed_script
+    if seed_script in SEED_SCRIPTS:
+        script_path = SEED_SCRIPTS[seed_script].get(platform, SEED_SCRIPTS[seed_script]["sqlserver"])
+        try:
+            with open(script_path, "r", encoding="utf-8") as f:
+                script_content = f.read()
+        except FileNotFoundError:
+            return json.dumps({"error": f"Seed script not found: {script_path}"})
+    
+    # Split by GO statements for SQL Server batch execution
+    batches = [b.strip() for b in script_content.split("\nGO\n") if b.strip() and not b.strip().startswith("--")]
+    
+    pool = await _get_sql_pool()
+    results = {"status": "success", "database": database, "batches_executed": 0, "errors": []}
+    
+    async with pool.acquire() as conn:
+        cursor = await conn.cursor()
+        for batch in batches:
+            if not batch.strip() or batch.strip().upper() in ("GO", ""):
+                continue
+            try:
+                await cursor.execute(batch)
+                await cursor.commit()
+                results["batches_executed"] += 1
+            except Exception as e:
+                error_msg = str(e)
+                # Skip certain expected errors
+                if "already exists" not in error_msg.lower():
+                    results["errors"].append({"batch": batch[:100], "error": error_msg})
+    
+    if results["errors"]:
+        results["status"] = "partial" if results["batches_executed"] > 0 else "failed"
+    
+    return json.dumps(results, default=str)
+
+
+@mcp.tool()
+async def load_seed_data_mysql(database: str, seed_script: str = "ecommerce") -> str:
+    """Load seed data into MySQL by executing a SQL script.
+    
+    Args:
+        database: Target database name (e.g. 'source_db')
+        seed_script: One of: 'ecommerce' (default seed), or actual SQL script content.
+    
+    Returns:
+        JSON with execution status and summary.
+    """
+    SEED_SCRIPTS = {
+        "ecommerce": "/app/data/seed/init-mysql.sql",
+    }
+    
+    script_content = seed_script
+    if seed_script in SEED_SCRIPTS:
+        try:
+            with open(SEED_SCRIPTS[seed_script], "r", encoding="utf-8") as f:
+                script_content = f.read()
+        except FileNotFoundError:
+            return json.dumps({"error": f"Seed script not found: {SEED_SCRIPTS[seed_script]}"})
+    
+    # Split by semicolons, handling multi-line statements
+    statements = []
+    current = []
+    for line in script_content.split("\n"):
+        line = line.strip()
+        if line.startswith("--") or not line:
+            continue
+        current.append(line)
+        if line.endswith(";"):
+            statements.append(" ".join(current))
+            current = []
+    
+    pool = await _get_mysql_pool()
+    results = {"status": "success", "database": database, "statements_executed": 0, "errors": []}
+    
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cursor:
+            for stmt in statements:
+                if not stmt.strip() or stmt.strip() == ";":
+                    continue
+                try:
+                    await cursor.execute(stmt)
+                    results["statements_executed"] += 1
+                except Exception as e:
+                    error_msg = str(e)
+                    if "already exists" not in error_msg.lower() and "Duplicate" not in error_msg:
+                        results["errors"].append({"statement": stmt[:100], "error": error_msg})
+            await conn.commit()
+    
+    if results["errors"]:
+        results["status"] = "partial" if results["statements_executed"] > 0 else "failed"
+    
+    return json.dumps(results, default=str)
+
+
+@mcp.tool()
+async def load_seed_data_postgres(database: str, seed_script: str = "ecommerce") -> str:
+    """Load seed data into PostgreSQL by executing a SQL script.
+    
+    Args:
+        database: Target database name (e.g. 'target_db')
+        seed_script: One of: 'ecommerce' (default seed), or actual SQL script content.
+    
+    Returns:
+        JSON with execution status and summary.
+    """
+    # PostgreSQL seed would need to be created separately - for now use direct SQL
+    script_content = seed_script
+    
+    # If it's a predefined name, we'd load from file (create pg seed script later)
+    if seed_script == "ecommerce":
+        # For now, return instruction to use the SQL scripts directly
+        return json.dumps({
+            "status": "info",
+            "message": "PostgreSQL seed data should be loaded via pg_execute_query with individual INSERT statements, or use the TransformationAgent to create tables from SQL Server schema."
+        })
+    
+    pool = await _get_pg_pool_for_db(database)
+    results = {"status": "success", "database": database, "statements_executed": 0, "errors": []}
+    
+    # Split by semicolons
+    statements = [s.strip() for s in script_content.split(";") if s.strip()]
+    
+    async with pool.acquire() as conn:
+        for stmt in statements:
+            if not stmt or stmt.startswith("--"):
+                continue
+            try:
+                await conn.execute(stmt)
+                results["statements_executed"] += 1
+            except Exception as e:
+                results["errors"].append({"statement": stmt[:100], "error": str(e)})
+    
+    if results["errors"]:
+        results["status"] = "partial" if results["statements_executed"] > 0 else "failed"
+    
+    return json.dumps(results, default=str)
+
+
+@mcp.tool()
+async def list_available_seed_scripts() -> str:
+    """List available seed data scripts for different platforms.
+    
+    Returns:
+        JSON with available seed scripts and their descriptions.
+    """
+    import os
+    seed_dir = "/app/data/seed"
+    scripts = []
+    
+    try:
+        for filename in os.listdir(seed_dir):
+            if filename.endswith(".sql"):
+                filepath = os.path.join(seed_dir, filename)
+                # Get first few lines as description
+                with open(filepath, "r", encoding="utf-8") as f:
+                    lines = f.readlines()[:10]
+                    desc = ""
+                    for line in lines:
+                        if line.strip().startswith("--"):
+                            desc += line.strip("- \n") + " "
+                        elif line.strip():
+                            break
+                
+                scripts.append({
+                    "filename": filename,
+                    "platform": filename.replace("init-", "").replace(".sql", ""),
+                    "description": desc.strip()[:200],
+                    "path": filepath
+                })
+    except FileNotFoundError:
+        return json.dumps({"error": "Seed directory not found", "path": seed_dir})
+    
+    return json.dumps({
+        "seed_directory": seed_dir,
+        "available_scripts": scripts,
+        "usage": "Use load_seed_data_sqlserver, load_seed_data_mysql, or load_seed_data_postgres with seed_script='ecommerce'"
+    }, default=str)
+
+
 # ── MySQL / MariaDB Tools ────────────────────────────────────────────
 
 
@@ -1845,6 +2055,36 @@ async def adf_deploy_linked_service(
 
 
 @mcp.tool()
+async def adf_deploy_dataset(
+    resource_group: str, factory_name: str, dataset_json: str
+) -> str:
+    """
+    Deploy a dataset to Azure Data Factory.
+
+    Args:
+        resource_group: Azure resource group containing the ADF instance.
+        factory_name: Name of the Data Factory.
+        dataset_json: Full dataset JSON (from adf_generate_dataset).
+    """
+    try:
+        client = _get_adf_client()
+        ds_def = json.loads(dataset_json)
+        ds_name = ds_def.get("name", "unknown_dataset")
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: client.datasets.create_or_update(
+                resource_group, factory_name, ds_name, ds_def.get("properties", ds_def)
+            ),
+        )
+        return json.dumps(
+            {"status": "deployed", "name": ds_name, "factory": factory_name, "id": getattr(result, "id", "")}
+        )
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
 async def adf_deploy_pipeline(
     resource_group: str, factory_name: str, pipeline_json: str
 ) -> str:
@@ -2063,6 +2303,352 @@ async def fabric_generate_dataflow(
         "TARGET_TABLE": target_table,
     }
     return json.dumps(fill_template(FABRIC_DATAFLOW_GEN2_TEMPLATE, params), indent=2)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ETL / ELT Transformation Mapping & Data Flow Generation Tools
+# ══════════════════════════════════════════════════════════════════════
+
+from transformation_templates import (
+    ADF_EXPRESSIONS,
+    POWER_QUERY_M_EXPRESSIONS,
+    PYSPARK_EXPRESSIONS,
+    build_adf_dataflow_pipeline,
+    build_adf_mapping_dataflow,
+    build_column_mapping,
+    build_fabric_dataflow_gen2_with_transforms,
+    build_synapse_etl_notebook,
+)
+
+
+@mcp.tool()
+async def list_transformation_expressions(
+    platform: str = "adf",
+    category: str = "",
+) -> str:
+    """
+    List available transformation expressions for a given platform.
+
+    Args:
+        platform: Target platform — 'adf' (ADF Data Flow Expression Language),
+                  'pyspark' (Synapse Spark), or 'powerquery' (Fabric Power Query M).
+        category: Optional filter — 'string', 'type', 'date', 'null', 'conditional',
+                  'aggregate', 'hash'. Leave empty to list all.
+    """
+    libs = {
+        "adf": ADF_EXPRESSIONS,
+        "pyspark": PYSPARK_EXPRESSIONS,
+        "powerquery": POWER_QUERY_M_EXPRESSIONS,
+    }
+    lib = libs.get(platform.lower(), ADF_EXPRESSIONS)
+
+    category_keywords: dict[str, list[str]] = {
+        "string": ["upper", "lower", "trim", "ltrim", "rtrim", "concat", "substring",
+                    "replace", "regex_replace", "left_pad", "right_pad", "soundex"],
+        "type": ["to_string", "to_integer", "to_long", "to_float", "to_double",
+                 "to_decimal", "to_date", "to_timestamp", "to_boolean",
+                 "to_number", "to_text", "to_datetime",
+                 "cast_int", "cast_double", "cast_string"],
+        "date": ["current_date", "current_timestamp", "year", "month",
+                 "day_of_month", "day", "date_diff", "add_days", "format_date"],
+        "null": ["coalesce", "iif_null", "is_null"],
+        "conditional": ["iif", "case_when"],
+        "aggregate": ["sum", "avg", "min", "max", "count", "count_distinct"],
+        "hash": ["md5", "sha2_256", "hash_md5"],
+    }
+
+    if category:
+        allowed = set(category_keywords.get(category.lower(), []))
+        filtered = {k: v for k, v in lib.items() if k in allowed}
+    else:
+        filtered = lib
+
+    result = []
+    for name, info in filtered.items():
+        result.append({
+            "name": name,
+            "expression_template": info["expression"],
+            "description": info["description"],
+        })
+
+    return json.dumps({
+        "platform": platform,
+        "category": category or "all",
+        "expressions": result,
+        "total": len(result),
+    }, indent=2)
+
+
+@mcp.tool()
+async def generate_transformation_mapping(
+    source_columns_json: str,
+    target_columns_json: str,
+    transformations_json: str = "[]",
+) -> str:
+    """
+    Generate a structured column-level transformation mapping between
+    source and target schemas. Auto-pairs columns by name and flags
+    unmapped columns.
+
+    Args:
+        source_columns_json: JSON array of source columns, e.g.
+            [{"name":"first_name","type":"varchar(50)","nullable":true},
+             {"name":"last_name","type":"varchar(50)","nullable":true},
+             {"name":"birth_date","type":"datetime","nullable":true}]
+        target_columns_json: JSON array of target columns, e.g.
+            [{"name":"full_name","type":"varchar(100)","nullable":true},
+             {"name":"birth_date","type":"date","nullable":true},
+             {"name":"age","type":"integer","nullable":true}]
+        transformations_json: JSON array of transformation rules, e.g.
+            [{"source_column":"first_name","target_column":"full_name",
+              "expression_type":"concat",
+              "params":{"column1":"first_name","separator":" ","column2":"last_name"}},
+             {"source_column":"birth_date","target_column":"age",
+              "expression_type":"custom",
+              "expression":"dateDiff(currentDate(), birth_date) / 365"}]
+    """
+    source_cols = json.loads(source_columns_json)
+    target_cols = json.loads(target_columns_json)
+    transforms = json.loads(transformations_json)
+
+    mapping = build_column_mapping(source_cols, target_cols, transforms)
+
+    return json.dumps({
+        "status": "success",
+        "mapping": mapping,
+        "summary": {
+            "direct_mappings": len(mapping["direct_mappings"]),
+            "transformation_mappings": len(mapping["transformation_mappings"]),
+            "unmapped_source": len(mapping["unmapped_source_columns"]),
+            "unmapped_target": len(mapping["unmapped_target_columns"]),
+        },
+    }, indent=2)
+
+
+@mcp.tool()
+async def generate_adf_mapping_dataflow(
+    dataflow_name: str,
+    source_dataset: str,
+    target_dataset: str,
+    source_table: str,
+    target_table: str,
+    column_mappings_json: str,
+    derived_columns_json: str = "[]",
+    filter_expression: str = "",
+    lookup_config_json: str = "",
+    surrogate_key_column: str = "",
+) -> str:
+    """
+    Generate an ADF Mapping Data Flow JSON with transformation activities
+    (DerivedColumn, Select, Filter, Lookup, SurrogateKey).
+
+    Args:
+        dataflow_name: Name of the data flow (e.g. 'df_customers_etl').
+        source_dataset: ADF dataset name for the source.
+        target_dataset: ADF dataset name for the target/sink.
+        source_table: Source table name.
+        target_table: Target table name.
+        column_mappings_json: JSON array of column mappings, e.g.
+            [{"source_column":"first_name","target_column":"full_name"},
+             {"source_column":"email","target_column":"email_address"}]
+        derived_columns_json: JSON array of derived column expressions using
+            ADF Data Flow Expression Language, e.g.
+            [{"target_column":"full_name","expression":"concat(first_name, ' ', last_name)"},
+             {"target_column":"created_at","expression":"currentTimestamp()"},
+             {"target_column":"is_active","expression":"iif(status == 'A', true(), false())"}]
+        filter_expression: Optional ADF DFEL filter expression, e.g.
+            "status != 'DELETED' && created_date > toDate('2020-01-01')"
+        lookup_config_json: Optional JSON for lookup/join configuration, e.g.
+            {"lookup_stream":"LookupCountry","lookup_dataset":"ds_countries",
+             "lookup_table":"countries","join_condition":"country_code == country_id"}
+        surrogate_key_column: Optional column name for auto-incrementing surrogate key.
+    """
+    col_mappings = json.loads(column_mappings_json)
+    derived_cols = json.loads(derived_columns_json) if derived_columns_json else None
+    lookup_cfg = json.loads(lookup_config_json) if lookup_config_json else None
+
+    dataflow = build_adf_mapping_dataflow(
+        dataflow_name=dataflow_name,
+        source_dataset=source_dataset,
+        target_dataset=target_dataset,
+        source_table=source_table,
+        target_table=target_table,
+        column_mappings=col_mappings,
+        derived_columns=derived_cols or None,
+        filter_expression=filter_expression or None,
+        lookup_config=lookup_cfg,
+        surrogate_key_column=surrogate_key_column or None,
+    )
+
+    return json.dumps(dataflow, indent=2)
+
+
+@mcp.tool()
+async def generate_adf_dataflow_pipeline(
+    pipeline_name: str,
+    dataflow_name: str,
+    compute_core_count: int = 8,
+    compute_type: str = "General",
+) -> str:
+    """
+    Generate an ADF pipeline that executes a Mapping Data Flow.
+    Use this after generating a data flow with generate_adf_mapping_dataflow.
+
+    Args:
+        pipeline_name: Pipeline name (e.g. 'pl_customers_etl').
+        dataflow_name: Name of the data flow to execute.
+        compute_core_count: Spark cluster core count (8, 16, 32, 48, 80, 144, 272). Default 8.
+        compute_type: Compute type — 'General', 'MemoryOptimized', or 'ComputeOptimized'.
+    """
+    pipeline = build_adf_dataflow_pipeline(
+        pipeline_name=pipeline_name,
+        dataflow_name=dataflow_name,
+        compute_core_count=compute_core_count,
+        compute_type=compute_type,
+    )
+    return json.dumps(pipeline, indent=2)
+
+
+@mcp.tool()
+async def deploy_adf_dataflow(
+    resource_group: str,
+    factory_name: str,
+    dataflow_json: str,
+) -> str:
+    """
+    Deploy a Mapping Data Flow to Azure Data Factory.
+
+    Args:
+        resource_group: Azure resource group containing the ADF instance.
+        factory_name: Name of the Data Factory.
+        dataflow_json: Full data flow JSON (from generate_adf_mapping_dataflow).
+    """
+    try:
+        client = _get_adf_client()
+        df_def = json.loads(dataflow_json)
+        df_name = df_def.get("name", "unknown_dataflow")
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: client.data_flows.create_or_update(
+                resource_group, factory_name, df_name,
+                df_def.get("properties", df_def),
+            ),
+        )
+        return json.dumps({
+            "status": "deployed",
+            "name": df_name,
+            "factory": factory_name,
+            "id": getattr(result, "id", ""),
+        })
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def generate_synapse_etl_notebook(
+    notebook_name: str,
+    source_format: str,
+    source_url: str,
+    source_table: str,
+    target_format: str,
+    target_url: str,
+    target_table: str,
+    column_mappings_json: str,
+    transformations_json: str = "[]",
+) -> str:
+    """
+    Generate a Synapse Spark notebook with ETL transformations using PySpark.
+    Includes Extract → Transform (column mappings, renames, expressions) → Load.
+
+    Args:
+        notebook_name: Notebook display name.
+        source_format: Spark read format (jdbc, parquet, csv, json, cosmos.oltp …).
+        source_url: JDBC URL or storage path for source.
+        source_table: Source table / path.
+        target_format: Spark write format.
+        target_url: JDBC URL or storage path for target.
+        target_table: Target table / path.
+        column_mappings_json: JSON array of column mappings, e.g.
+            [{"source_column":"first_name","target_column":"first_name"},
+             {"source_column":"last_name","target_column":"surname"}]
+        transformations_json: JSON array of PySpark transformation expressions, e.g.
+            [{"target_column":"full_name",
+              "expression":"F.concat(F.col('first_name'), F.lit(' '), F.col('last_name'))"},
+             {"target_column":"year_born","expression":"F.year(F.col('birth_date'))"}]
+    """
+    col_mappings = json.loads(column_mappings_json)
+    transforms = json.loads(transformations_json) if transformations_json else None
+
+    notebook = build_synapse_etl_notebook(
+        notebook_name=notebook_name,
+        source_format=source_format,
+        source_url=source_url,
+        source_table=source_table,
+        target_format=target_format,
+        target_url=target_url,
+        target_table=target_table,
+        column_mappings=col_mappings,
+        transformations=transforms or [],
+    )
+
+    return json.dumps(notebook, indent=2)
+
+
+@mcp.tool()
+async def generate_fabric_dataflow_with_transforms(
+    dataflow_name: str,
+    source_connector: str,
+    source_params: str,
+    schema_name: str,
+    table_name: str,
+    lakehouse_id: str,
+    target_table: str,
+    column_mappings_json: str,
+    transformations_json: str = "[]",
+    load_type: str = "Append",
+) -> str:
+    """
+    Generate a Fabric Dataflow Gen2 definition with Power Query M
+    transformations (column renames, type conversions, derived columns).
+
+    Args:
+        dataflow_name: Display name for the dataflow.
+        source_connector: Power Query M connector function, e.g.
+            Sql.Database, PostgreSQL.Database, Oracle.Database.
+        source_params: Connector-specific M parameters, e.g.
+            '"myserver.database.windows.net", "mydb"'
+        schema_name: Source schema/namespace.
+        table_name: Source table/collection name.
+        lakehouse_id: Target Fabric Lakehouse GUID.
+        target_table: Target table name in Lakehouse.
+        column_mappings_json: JSON array of column mappings, e.g.
+            [{"source_column":"first_name","target_column":"first_name"},
+             {"source_column":"LastName","target_column":"last_name"}]
+        transformations_json: JSON array of Power Query M transformations, e.g.
+            [{"target_column":"full_name",
+              "expression":"[first_name] & \" \" & [last_name]",
+              "is_derived":true},
+             {"target_column":"email","expression":"Text.Lower([email])"}]
+        load_type: 'Append' or 'Replace'. Default 'Append'.
+    """
+    col_mappings = json.loads(column_mappings_json)
+    transforms = json.loads(transformations_json) if transformations_json else None
+
+    dataflow = build_fabric_dataflow_gen2_with_transforms(
+        dataflow_name=dataflow_name,
+        source_connector=source_connector,
+        source_params=source_params,
+        schema_name=schema_name,
+        table_name=table_name,
+        lakehouse_id=lakehouse_id,
+        target_table=target_table,
+        column_mappings=col_mappings,
+        transformations=transforms or [],
+        load_type=load_type,
+    )
+
+    return json.dumps(dataflow, indent=2)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -3371,6 +3957,18 @@ async def azure_get_resource_status(
 
     result = await loop.run_in_executor(None, _get_status)
     return json.dumps(result, default=str)
+
+
+# ── Register Security Assessment Tools ───────────────────────────────
+
+try:
+    from security_assessment_tools import register_security_tools
+    from security_excel_generator import register_excel_tools
+    
+    register_security_tools(mcp)
+    register_excel_tools(mcp)
+except ImportError as e:
+    print(f"[WARN] Security assessment tools not loaded: {e}")
 
 
 # ── Entry point ──────────────────────────────────────────────────────

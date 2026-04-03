@@ -153,8 +153,17 @@ class FoundryAgentTemplate:
             response = await self._base.run(
                 task=prompt, thread_id=context.thread_id,
                 on_progress=on_progress,
+                subtask_label=context.subtask_label,
             )
             duration = time.monotonic() - start
+
+            # Unpack dict response: {"text": str, "usage": {...}}
+            if isinstance(response, dict):
+                text = response.get("text", "")
+                usage = response.get("usage", {})
+            else:
+                text = str(response)
+                usage = {}
 
             logger.info(
                 "agent_run_complete",
@@ -162,13 +171,21 @@ class FoundryAgentTemplate:
                 plan_id=context.plan_id,
                 step_id=context.step_id,
                 duration=f"{duration:.2f}s",
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0),
+                total_tokens=usage.get("total_tokens", 0),
+                llm_calls=usage.get("llm_calls", 0),
             )
 
             return AgentRunResult(
                 agent_name=self.name,
-                content=response,
+                content=text,
                 success=True,
                 duration_seconds=duration,
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0),
+                total_tokens=usage.get("total_tokens", 0),
+                llm_calls=usage.get("llm_calls", 0),
             )
         except Exception as exc:
             duration = time.monotonic() - start

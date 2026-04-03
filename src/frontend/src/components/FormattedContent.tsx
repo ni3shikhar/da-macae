@@ -29,6 +29,8 @@ import {
   DismissCircle16Filled,
   Database24Regular,
   ArrowDownload24Regular,
+  DocumentText24Regular,
+  Table24Regular,
 } from "@fluentui/react-icons";
 
 /* ── Styles ──────────────────────────────────────────────────────── */
@@ -420,12 +422,13 @@ const useStyles = makeStyles({
     marginBottom: "8px",
     borderRadius: "8px",
     backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorBrandStroke1}`,
+    border: `1px solid ${tokens.colorNeutralStroke1}`,
+    borderLeft: "4px solid",
+    borderLeftColor: tokens.colorBrandStroke1,
     boxShadow: tokens.shadow2,
   },
   downloadIcon: {
     fontSize: "28px",
-    color: tokens.colorBrandForeground1,
     flexShrink: 0,
   },
   downloadInfo: {
@@ -1061,6 +1064,37 @@ const DataTable = ({
   );
 };
 
+/** Map file extensions to display info. */
+function getFileTypeInfo(fileName: string): {
+  icon: React.ReactElement;
+  label: string;
+  color: string;
+} {
+  const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+  switch (ext) {
+    case "docx":
+    case "doc":
+      return {
+        icon: <DocumentText24Regular style={{ color: "#2B579A" }} />,
+        label: "Word Document",
+        color: "#2B579A",
+      };
+    case "xlsx":
+    case "xls":
+      return {
+        icon: <Table24Regular style={{ color: "#217346" }} />,
+        label: "Excel Spreadsheet",
+        color: "#217346",
+      };
+    default:
+      return {
+        icon: <ArrowDownload24Regular />,
+        label: "Download File",
+        color: tokens.colorBrandForeground1,
+      };
+  }
+}
+
 /** Renders a download card for a blob upload result. */
 const BlobDownloadLink = ({
   container,
@@ -1072,14 +1106,15 @@ const BlobDownloadLink = ({
   const styles = useStyles();
   const fileName = blob.includes("/") ? blob.split("/").pop()! : blob;
   const url = blobDownloadUrl(container, blob);
+  const fileInfo = getFileTypeInfo(fileName);
 
   return (
-    <div className={styles.downloadCard}>
-      <ArrowDownload24Regular className={styles.downloadIcon} />
+    <div className={styles.downloadCard} style={{ borderLeftColor: fileInfo.color }}>
+      <span className={styles.downloadIcon}>{fileInfo.icon}</span>
       <div className={styles.downloadInfo}>
         <span className={styles.downloadTitle}>{fileName}</span>
         <span className={styles.downloadMeta}>
-          {container} / {blob}
+          {fileInfo.label} &middot; {container} / {blob}
         </span>
       </div>
       <a
@@ -1088,6 +1123,7 @@ const BlobDownloadLink = ({
         className={styles.downloadLink}
         target="_blank"
         rel="noopener noreferrer"
+        style={{ backgroundColor: fileInfo.color }}
       >
         <ArrowDownload24Regular style={{ fontSize: 16 }} />
         Download

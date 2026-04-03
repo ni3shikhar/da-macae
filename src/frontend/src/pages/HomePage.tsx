@@ -115,13 +115,30 @@ export default function HomePage() {
   const [providerInfo, setProviderInfo] = useState<LlmProviderInfo | null>(null);
 
   useEffect(() => {
-    getTeamConfigs(USER_ID)
-      .then(setTeams)
-      .catch(console.error)
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    const fetchTeamsWithRetry = async (retries = 5, delay = 2000) => {
+      for (let i = 0; i < retries; i++) {
+        try {
+          const data = await getTeamConfigs(USER_ID);
+          if (!cancelled) {
+            setTeams(data);
+            setLoading(false);
+          }
+          return;
+        } catch (err) {
+          console.warn(`Team fetch attempt ${i + 1}/${retries} failed:`, err);
+          if (i < retries - 1 && !cancelled) {
+            await new Promise((r) => setTimeout(r, delay * Math.pow(1.5, i)));
+          }
+        }
+      }
+      if (!cancelled) setLoading(false);
+    };
+    fetchTeamsWithRetry();
     getLlmProvider()
       .then(setProviderInfo)
       .catch(console.error);
+    return () => { cancelled = true; };
   }, []);
 
   const handleProviderChange = useCallback(

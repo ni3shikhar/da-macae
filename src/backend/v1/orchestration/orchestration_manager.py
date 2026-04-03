@@ -13,6 +13,8 @@ Implements the full Plan → Approve → Execute cycle:
 from __future__ import annotations
 
 import asyncio
+import json as _json
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine
@@ -29,6 +31,7 @@ from common.models.messages import (
     PlanStatus,
     PlanStep,
     StepStatus,
+    SubTaskState,
     TeamConfiguration,
     WebSocketMessage,
     WebSocketMessageType,
@@ -301,6 +304,8 @@ class OrchestrationManager:
             enriched_goal = (
                 f"{message}\n\n## User Clarification\n{clarification_context}"
             )
+            # Persist on plan so executing agents can reference it
+            plan.clarification_context = clarification_context
 
         # 3. Generate plan via planner LLM
         try:
@@ -470,6 +475,13 @@ class OrchestrationManager:
         Returns a single question string, or empty string if the goal
         (plus any prior answers) is clear enough.
         """
+        # ── Security Assessment Team — minimal clarification needed ─────────
+        if "security" in team_config.id.lower() or "security" in team_config.name.lower():
+            # Security assessments are self-contained — just need Azure subscription access
+            # which is handled via DefaultAzureCredential. No clarification questions needed.
+            return ""
+
+        # ── Data Migration Team — original logic ────────────────────────────
         prompt = (
             "You are a data migration planning assistant. A user submitted a migration request "
             "(possibly with follow-up clarifications already answered).\n\n"
@@ -596,6 +608,90 @@ class OrchestrationManager:
 
         return parse_planner_response(raw_plan, plan_id, agent_names)
 
+    # ── Infrastructure context extraction ────────────────────────────
+
+    @staticmethod
+    def _extract_infrastructure_context(prev_outputs: dict[str, str]) -> str:
+        """Extract structured infrastructure details from InfrastructureAgent output.
+
+        Scans the InfrastructureAgent's output for Azure resource details
+        (resource group, data factory, storage accounts, etc.) and returns
+        a concise, structured section that downstream agents
+        (PipelineGenerationAgent) can consume reliably.
+        """
+        infra_output = prev_outputs.get("InfrastructureAgent", "")
+        if not infra_output:
+            return ""
+
+        details: dict[str, str] = {}
+
+        # --- Resource Group ---
+        # Try JSON-style first: "resource_group": "rg-xxx"
+        rg_match = re.search(
+            r'"resource_group"\s*:\s*"([^"]+)"', infra_output
+        )
+        if not rg_match:
+            # Natural language: "resource group rg-xxx" or "resource group: rg-xxx"
+            rg_match = re.search(
+                r'resource[_ ]?group[:\s]+[`"\']?([a-zA-Z0-9_-]+)',
+                infra_output,
+                re.IGNORECASE,
+            )
+        if rg_match:
+            details["resource_group"] = rg_match.group(1)
+
+        # --- Data Factory Name ---
+        # JSON-style: "factory_name": "adf-xxx" or "name": "adf-xxx" near ADF context
+        fn_match = re.search(
+            r'"(?:factory_name|name)"\s*:\s*"(adf[a-zA-Z0-9_-]*)"',
+            infra_output,
+        )
+        if not fn_match:
+            # Natural language: "Data Factory adf-migration-1234"
+            fn_match = re.search(
+                r'[Dd]ata\s+[Ff]actory\s+(?:named?\s+)?[`"\']?([a-zA-Z0-9_-]+)',
+                infra_output,
+            )
+        if fn_match:
+            details["factory_name"] = fn_match.group(1)
+
+        # --- ADF Resource ID (contains both RG and factory name) ---
+        adf_id_match = re.search(
+            r'/subscriptions/[^/]+/resourceGroups/([^/]+)'
+            r'/providers/Microsoft\.DataFactory/factories/([^/"\s]+)',
+            infra_output,
+        )
+        if adf_id_match:
+            details.setdefault("resource_group", adf_id_match.group(1))
+            details.setdefault("factory_name", adf_id_match.group(2))
+
+        # --- Location ---
+        loc_match = re.search(
+            r'"location"\s*:\s*"([^"]+)"', infra_output
+        )
+        if loc_match:
+            details.setdefault("location", loc_match.group(1))
+
+        # --- Storage Account ---
+        sa_match = re.search(
+            r'"(?:storage_account|name)"\s*:\s*"(st[a-z0-9]+)"',
+            infra_output,
+        )
+        if sa_match:
+            details["storage_account"] = sa_match.group(1)
+
+        if not details:
+            return ""
+
+        lines = [
+            "\n## INFRASTRUCTURE DETAILS (extracted from InfrastructureAgent):",
+            "Use these values when calling deploy tools. Do NOT ask the user for them.\n",
+        ]
+        for key, value in details.items():
+            lines.append(f"- **{key}**: `{value}`")
+
+        return "\n".join(lines) + "\n"
+
     def _default_planner_prompt(self) -> str:
         return """You are a data migration planning specialist. Given a user's migration goal
 and a team of specialist agents, create an optimal execution plan.
@@ -626,12 +722,13 @@ Return a JSON object with a "task" field and a "steps" array."""
         default_steps = [
             {"step_number": 1, "agent": "DiscoveryAgent", "task": "Discover source database schema and metadata", "dependencies": []},
             {"step_number": 2, "agent": "InfrastructureAgent", "task": "Verify target environment exists and provision resources if not present", "dependencies": []},
-            {"step_number": 3, "agent": "AnalysisAgent", "task": "Analyze migration complexity and risks", "dependencies": [1]},
-            {"step_number": 4, "agent": "MappingAgent", "task": "Generate source-to-target schema mapping", "dependencies": [1, 3]},
-            {"step_number": 5, "agent": "TransformationAgent", "task": "Define data transformation rules", "dependencies": [4]},
-            {"step_number": 6, "agent": "DataQualityAgent", "task": "Create data validation rules", "dependencies": [4, 5]},
-            {"step_number": 7, "agent": "PipelineGenerationAgent", "task": "Generate linked-service connections and migration pipeline definitions for the target Azure service (ADF/Synapse/Fabric)", "dependencies": [2, 5, 6]},
-            {"step_number": 8, "agent": "ReportingAgent", "task": "Generate migration summary report", "dependencies": [1, 2, 3, 4, 5, 6, 7]},
+            {"step_number": 3, "agent": "DataSetupAgent", "task": "Load seed data into source/target database for mapping and testing", "dependencies": [1, 2]},
+            {"step_number": 4, "agent": "AnalysisAgent", "task": "Analyze migration complexity and risks", "dependencies": [1]},
+            {"step_number": 5, "agent": "MappingAgent", "task": "Generate source-to-target schema mapping", "dependencies": [1, 3, 4]},
+            {"step_number": 6, "agent": "TransformationAgent", "task": "Define data transformation rules", "dependencies": [5]},
+            {"step_number": 7, "agent": "DataQualityAgent", "task": "Create data validation rules", "dependencies": [5, 6]},
+            {"step_number": 8, "agent": "PipelineGenerationAgent", "task": "Generate linked-service connections and migration pipeline definitions for the target Azure service (ADF/Synapse/Fabric)", "dependencies": [2, 6, 7]},
+            {"step_number": 9, "agent": "ReportingAgent", "task": "Generate migration summary report", "dependencies": [1, 2, 3, 4, 5, 6, 7, 8]},
         ]
         # Filter to available agents
         available = {a.lower().replace("agent", "") for a in agents}
@@ -805,6 +902,14 @@ Return a JSON object with a "task" field and a "steps" array."""
                 subtasks = await self._generate_subtasks(
                     step.agent, step.task, agent_tool_names,
                 )
+
+                # Persist subtask list on the step for recovery after reconnect
+                step.subtasks = [
+                    SubTaskState(id=st["id"], label=st["label"], status="pending")
+                    for st in subtasks
+                ]
+                await self._save_plan(plan)
+
                 await self._notify_ws(
                     plan.user_id,
                     WebSocketMessageType.AGENT_SUBTASKS,
@@ -848,6 +953,7 @@ Return a JSON object with a "task" field and a "steps" array."""
                     step.error = step_feedback or "Rejected by user"
                     # Mark all sub-tasks as failed
                     for st in subtasks:
+                        self._update_subtask_status(step, st["id"], "failed")
                         await self._notify_ws(
                             plan.user_id,
                             WebSocketMessageType.SUBTASK_UPDATE,
@@ -858,6 +964,7 @@ Return a JSON object with a "task" field and a "steps" array."""
                                 "status": "failed",
                             },
                         )
+                    await self._save_plan(plan)
                     await self._notify_ws(
                         plan.user_id,
                         WebSocketMessageType.STEP_STATUS,
@@ -892,6 +999,22 @@ Return a JSON object with a "task" field and a "steps" array."""
                 step_failed = False
                 accumulated_context = ""  # Carries forward across sub-tasks
                 user_provided_inputs: list[str] = []  # Explicit user answers
+                # Token usage accumulator for the entire step
+                step_prompt_tokens = 0
+                step_completion_tokens = 0
+                step_total_tokens = 0
+                step_llm_calls = 0
+                # If the user chose "Auto-approve All" at the step approval
+                # gate, skip all per-subtask input gates.
+                auto_approve_remaining = (
+                    step_feedback == "__auto_approve_all__"
+                )
+                if auto_approve_remaining:
+                    logger.info(
+                        "step_auto_approve_all_from_approval",
+                        plan_id=plan.plan_id,
+                        step=step.step_number,
+                    )
 
                 for st_idx, st in enumerate(subtasks):
                     # ── Cancellation check ──
@@ -906,6 +1029,8 @@ Return a JSON object with a "task" field and a "steps" array."""
                         break
 
                     # Mark this sub-task as in_progress
+                    self._update_subtask_status(step, st["id"], "in_progress")
+                    await self._save_plan(plan)
                     await self._notify_ws(
                         plan.user_id,
                         WebSocketMessageType.SUBTASK_UPDATE,
@@ -923,6 +1048,14 @@ Return a JSON object with a "task" field and a "steps" array."""
                         f"{len(subtasks)} for the overall task: {step.task}\n\n"
                         f"Current sub-task: {st['label']}\n",
                     ]
+                    # Inject pre-plan clarification so agents don't re-ask
+                    if plan.clarification_context:
+                        subtask_prompt_parts.append(
+                            "\n## CRITICAL — User Clarification (already answered before planning):\n"
+                            "The user has ALREADY provided the following information. "
+                            "Do NOT ask these questions again. Use this information directly.\n\n"
+                            f"{plan.clarification_context}\n"
+                        )
                     if user_provided_inputs:
                         subtask_prompt_parts.append(
                             "\n## IMPORTANT — User-Provided Information:\n"
@@ -937,6 +1070,17 @@ Return a JSON object with a "task" field and a "steps" array."""
                             f"{accumulated_context}\n"
                         )
                     if prev_outputs:
+                        # Inject structured infrastructure details for
+                        # downstream agents that need resource_group /
+                        # factory_name etc.  This appears BEFORE the
+                        # full free-form outputs so the LLM sees the
+                        # values prominently.
+                        infra_ctx = self._extract_infrastructure_context(
+                            prev_outputs,
+                        )
+                        if infra_ctx:
+                            subtask_prompt_parts.append(infra_ctx)
+
                         subtask_prompt_parts.append(
                             "\n## Previous Agent Outputs\n"
                         )
@@ -953,6 +1097,7 @@ Return a JSON object with a "task" field and a "steps" array."""
                         user_id=plan.user_id,
                         task=subtask_task,
                         previous_outputs=prev_outputs,
+                        subtask_label=st["label"],
                     )
 
                     # Progress callback scoped to this sub-task
@@ -990,7 +1135,20 @@ Return a JSON object with a "task" field and a "steps" array."""
                             f"{result.content}\n"
                         )
 
-                        # Mark sub-task completed
+                        # Accumulate token usage for the step
+                        step_prompt_tokens += result.prompt_tokens
+                        step_completion_tokens += result.completion_tokens
+                        step_total_tokens += result.total_tokens
+                        step_llm_calls += result.llm_calls
+
+                        # Mark sub-task completed (with token usage)
+                        self._update_subtask_status(
+                            step, st["id"], "completed",
+                            prompt_tokens=result.prompt_tokens,
+                            completion_tokens=result.completion_tokens,
+                            total_tokens=result.total_tokens,
+                        )
+                        await self._save_plan(plan)
                         await self._notify_ws(
                             plan.user_id,
                             WebSocketMessageType.SUBTASK_UPDATE,
@@ -999,6 +1157,13 @@ Return a JSON object with a "task" field and a "steps" array."""
                                 "agent": step.agent,
                                 "subtask_id": st["id"],
                                 "status": "completed",
+                                "prompt_tokens": result.prompt_tokens,
+                                "completion_tokens": result.completion_tokens,
+                                "total_tokens": result.total_tokens,
+                                "llm_calls": result.llm_calls,
+                                "step_prompt_tokens": step_prompt_tokens,
+                                "step_completion_tokens": step_completion_tokens,
+                                "step_total_tokens": step_total_tokens,
                             },
                         )
 
@@ -1018,6 +1183,8 @@ Return a JSON object with a "task" field and a "steps" array."""
                         )
                     else:
                         # Mark sub-task failed
+                        self._update_subtask_status(step, st["id"], "failed")
+                        await self._save_plan(plan)
                         await self._notify_ws(
                             plan.user_id,
                             WebSocketMessageType.SUBTASK_UPDATE,
@@ -1051,6 +1218,16 @@ Return a JSON object with a "task" field and a "steps" array."""
                         subtasks[st_idx + 1]["label"] if not is_last else ""
                     )
 
+                    # If auto-approve is active, skip the input gate
+                    if auto_approve_remaining:
+                        logger.info(
+                            "subtask_auto_approved",
+                            plan_id=plan.plan_id,
+                            step=step.step_number,
+                            subtask=st["id"],
+                        )
+                        continue
+
                     await self._notify_ws(
                         plan.user_id,
                         WebSocketMessageType.SUBTASK_INPUT_REQUEST,
@@ -1083,6 +1260,27 @@ Return a JSON object with a "task" field and a "steps" array."""
                     action = user_response.get("action", "continue")
                     answer = user_response.get("answer", "")
 
+                    if action == "auto_approve_all":
+                        # User chose to auto-approve all remaining sub-tasks
+                        auto_approve_remaining = True
+                        logger.info(
+                            "subtask_auto_approve_all_enabled",
+                            plan_id=plan.plan_id,
+                            step=step.step_number,
+                            from_subtask=st["id"],
+                        )
+                        # Capture any answer text they may have typed
+                        if answer and answer.strip():
+                            user_provided_inputs.append(
+                                f"[After sub-task {st_idx + 1} "
+                                f"({st['label']})]: {answer.strip()}"
+                            )
+                            accumulated_context += (
+                                f"\n### User input after sub-task "
+                                f"{st_idx + 1}:\n{answer}\n"
+                            )
+                        continue
+
                     if action == "cancel":
                         # Cancelled via cancel_pending_for_plan
                         logger.info(
@@ -1096,6 +1294,7 @@ Return a JSON object with a "task" field and a "steps" array."""
                     if action == "skip":
                         # Mark remaining sub-tasks as skipped
                         for remaining in subtasks[st_idx + 1:]:
+                            self._update_subtask_status(step, remaining["id"], "failed")
                             await self._notify_ws(
                                 plan.user_id,
                                 WebSocketMessageType.SUBTASK_UPDATE,
@@ -1106,6 +1305,7 @@ Return a JSON object with a "task" field and a "steps" array."""
                                     "status": "failed",
                                 },
                             )
+                        await self._save_plan(plan)
                         break
                     # Capture user input regardless of action button used
                     if answer and answer.strip():
@@ -1157,6 +1357,11 @@ Return a JSON object with a "task" field and a "steps" array."""
                                 f"{accumulated_context}\n"
                             )
                         if prev_outputs:
+                            infra_ctx = self._extract_infrastructure_context(
+                                prev_outputs,
+                            )
+                            if infra_ctx:
+                                rerun_parts.append(infra_ctx)
                             rerun_parts.append(
                                 "\n## Previous Agent Outputs\n"
                             )
@@ -1231,6 +1436,12 @@ Return a JSON object with a "task" field and a "steps" array."""
                     step.output = combined_output
                     step_outputs[step.agent] = combined_output
 
+                # Persist token usage on the step
+                step.prompt_tokens = step_prompt_tokens
+                step.completion_tokens = step_completion_tokens
+                step.total_tokens = step_total_tokens
+                step.llm_calls = step_llm_calls
+
                 step.completed_at = datetime.now(timezone.utc).isoformat()
 
                 # Calculate duration
@@ -1262,6 +1473,10 @@ Return a JSON object with a "task" field and a "steps" array."""
                             if not step_failed
                             else f"{step.agent} failed: {step.error}"
                         ),
+                        "prompt_tokens": step_prompt_tokens,
+                        "completion_tokens": step_completion_tokens,
+                        "total_tokens": step_total_tokens,
+                        "llm_calls": step_llm_calls,
                     },
                 )
 
@@ -1311,6 +1526,21 @@ Return a JSON object with a "task" field and a "steps" array."""
         )
 
     # ── Helpers ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _update_subtask_status(
+        step: PlanStep, subtask_id: str, status: str,
+        prompt_tokens: int = 0, completion_tokens: int = 0, total_tokens: int = 0,
+    ) -> None:
+        """Update the persisted subtask status (and token usage) on a step."""
+        for st in step.subtasks:
+            if st.id == subtask_id:
+                st.status = status
+                if total_tokens > 0:
+                    st.prompt_tokens = prompt_tokens
+                    st.completion_tokens = completion_tokens
+                    st.total_tokens = total_tokens
+                break
 
     async def _save_plan(self, plan: Plan) -> None:
         """Save/update plan in database."""

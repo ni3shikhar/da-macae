@@ -110,7 +110,7 @@ export async function sendSubtaskResponse(
   userId: string,
   stepNumber: number,
   subtaskId: string,
-  action: "continue" | "skip" | "answer",
+  action: "continue" | "skip" | "answer" | "auto_approve_all",
   answer: string = ""
 ): Promise<{ status: string }> {
   return post("/subtask_response", {

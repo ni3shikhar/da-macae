@@ -1,5 +1,15 @@
 import { AzureServiceType, PlanStatus, StepStatus } from "./enums";
 
+/** Persisted sub-task state for plan recovery after reconnect. */
+export interface SubTaskState {
+  id: string;
+  label: string;
+  status: string; // pending | in_progress | completed | failed
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+}
+
 /** A single step in a migration execution plan. */
 export interface PlanStep {
   id: string;
@@ -13,6 +23,11 @@ export interface PlanStep {
   started_at: string | null;
   completed_at: string | null;
   dependencies: number[];
+  subtasks: SubTaskState[];
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  llm_calls?: number;
 }
 
 /** Magentic Plan — the executable plan with ordered steps. */

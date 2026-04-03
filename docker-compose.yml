@@ -41,7 +41,7 @@ services:
       # Database backend: cosmosdb | in_memory
       DATABASE_BACKEND: ${DATABASE_BACKEND:-in_memory}
       # Anthropic Claude (alternative LLM provider)
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-20250514}
       # MCP server URL
       MCP_SERVER_URL: http://mcp-server:8001
@@ -151,6 +151,8 @@ services:
       SYNAPSE_WORKSPACE_ENDPOINT: ${SYNAPSE_WORKSPACE_ENDPOINT:-}
       # ── General
       MCP_PORT: 8001
+    volumes:
+      - ./data:/app/data
     depends_on:
       sqlserver:
         condition: service_healthy

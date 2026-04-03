@@ -177,6 +177,17 @@ class PipelineConfig(BaseModel):
 # ── Plan & Step Models ─────────────────────────────────────────────────
 
 
+class SubTaskState(BaseModel):
+    """Persisted sub-task state for plan recovery after reconnect."""
+
+    id: str
+    label: str
+    status: str = "pending"  # pending | in_progress | completed | failed
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
 class PlanStep(BaseModel):
     """A single step in a migration execution plan."""
 
@@ -191,6 +202,11 @@ class PlanStep(BaseModel):
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     dependencies: list[int] = Field(default_factory=list)
+    subtasks: list[SubTaskState] = Field(default_factory=list)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    llm_calls: int = 0
 
 
 class MPlan(BaseModel):
@@ -214,6 +230,7 @@ class Plan(BaseModel):
     overall_status: PlanStatus = PlanStatus.CREATED
     m_plan: Optional[MPlan] = None
     team_id: str = ""
+    clarification_context: str = ""  # Pre-plan Q&A so agents don't re-ask
     created_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -298,14 +315,14 @@ class SubtaskResponseInput(BaseModel):
     """Input for the /subtask_response endpoint.
 
     After each sub-task completes, the user can provide an answer
-    or signal to continue/skip.
+    or signal to continue/skip/auto-approve all remaining sub-tasks.
     """
 
     plan_id: str
     user_id: str
     step_number: int
     subtask_id: str
-    action: str = "continue"  # "continue", "skip", or "answer"
+    action: str = "continue"  # "continue", "skip", "answer", or "auto_approve_all"
     answer: str = ""
 
 

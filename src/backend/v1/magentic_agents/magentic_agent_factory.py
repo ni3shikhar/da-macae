@@ -53,10 +53,10 @@ class MagenticAgentFactory:
         self._mcp_server_url = mcp_server_url
         self._openai_chat_deployment = openai_chat_deployment
         # Active LLM provider: "openai" | "claude"  (auto-detected from available clients)
-        if anthropic_client:
-            self._llm_provider = "claude"
-        elif openai_client:
+        if openai_client:
             self._llm_provider = "openai"
+        elif anthropic_client:
+            self._llm_provider = "claude"
         else:
             self._llm_provider = "simulated"
 

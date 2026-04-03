@@ -12,9 +12,16 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Coroutine
 
+# Tool names whose results are blob upload confirmations.
+# When detected, the raw JSON is appended to the final output so the
+# frontend can render download links automatically.
+_BLOB_UPLOAD_TOOLS = {"storage_upload_blob"}
+
 import structlog
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+
+from .doc_generator import generate_and_upload_documents
 
 logger = structlog.get_logger(__name__)
 
@@ -68,6 +75,37 @@ def _extract_text_from_call_result(result: Any) -> str:
     return "\n".join(parts)
 
 
+def _append_blob_uploads(final_text: str, blob_uploads: list[str]) -> str:
+    """Append blob upload JSON metadata to the agent's final text.
+
+    The frontend ``FormattedContent`` component automatically detects
+    inline ``{"status":"uploaded","container":"...","blob":"..."}`` JSON
+    and renders a download card with a link.  By appending the raw tool
+    results here we guarantee the user always sees a clickable download
+    link, even when the LLM summarises the upload in prose without
+    including the raw JSON.
+    """
+    seen: set[tuple[str, str]] = set()
+    unique: list[str] = []
+    for raw in blob_uploads:
+        try:
+            obj = json.loads(raw)
+            key = (obj.get("container", ""), obj.get("blob", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            if raw in final_text:
+                continue
+            unique.append(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    if not unique:
+        return final_text
+
+    return final_text + "\n\n" + "\n".join(unique)
+
+
 async def run_agent_with_openai(
     *,
     openai_client: Any,
@@ -78,7 +116,8 @@ async def run_agent_with_openai(
     tool_names: list[str],
     agent_name: str = "agent",
     on_progress: ProgressCallback | None = None,
-) -> str:
+    subtask_label: str | None = None,
+) -> dict[str, Any]:
     """Run an agent task using Azure OpenAI with MCP tool calling.
 
     This is the main entry point. It:
@@ -99,10 +138,15 @@ async def run_agent_with_openai(
         on_progress: Optional async callback for streaming tool-call progress.
 
     Returns:
-        The final text response from the LLM after all tool calls.
+        A dict with 'text' (final response) and 'usage' (token counts).
     """
     sse_url = f"{mcp_server_url.rstrip('/')}/sse"
     requested = set(tool_names) if tool_names else None
+
+    # Accumulate token usage across all LLM rounds
+    _total_prompt_tokens = 0
+    _total_completion_tokens = 0
+    _total_llm_calls = 0
 
     logger.info(
         "openai_mcp_run_start",
@@ -132,6 +176,9 @@ async def run_agent_with_openai(
                 agent_tools=len(openai_tools),
             )
 
+            # Track blob uploads so we can surface download links
+            blob_uploads: list[str] = []
+
             # 2. Build initial messages
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
@@ -160,19 +207,51 @@ async def run_agent_with_openai(
                     )
                     raise
 
+                # Accumulate token usage from this round
+                _total_llm_calls += 1
+                if hasattr(response, 'usage') and response.usage:
+                    _total_prompt_tokens += getattr(response.usage, 'prompt_tokens', 0) or 0
+                    _total_completion_tokens += getattr(response.usage, 'completion_tokens', 0) or 0
+
                 choice = response.choices[0]
                 message = choice.message
 
                 # If no tool calls, we have the final response
                 if not message.tool_calls:
                     final_text = message.content or ""
+                    if blob_uploads:
+                        final_text = _append_blob_uploads(
+                            final_text, blob_uploads,
+                        )
+                    # Auto-generate Word/Excel documents from report output
+                    try:
+                        doc_uploads = await generate_and_upload_documents(
+                            final_text, agent_name, subtask_label=subtask_label,
+                        )
+                        if doc_uploads:
+                            blob_uploads.extend(doc_uploads)
+                            final_text = _append_blob_uploads(
+                                final_text, doc_uploads,
+                            )
+                    except Exception:
+                        logger.exception("openai_doc_gen_failed", agent=agent_name)
                     logger.info(
                         "openai_mcp_run_complete",
                         agent=agent_name,
                         rounds=round_num + 1,
                         response_length=len(final_text),
+                        prompt_tokens=_total_prompt_tokens,
+                        completion_tokens=_total_completion_tokens,
                     )
-                    return final_text
+                    return {
+                        "text": final_text,
+                        "usage": {
+                            "prompt_tokens": _total_prompt_tokens,
+                            "completion_tokens": _total_completion_tokens,
+                            "total_tokens": _total_prompt_tokens + _total_completion_tokens,
+                            "llm_calls": _total_llm_calls,
+                        },
+                    }
 
                 # Append the assistant message (with tool_calls)
                 messages.append(message.model_dump())
@@ -234,6 +313,10 @@ async def run_agent_with_openai(
                         except Exception:
                             pass  # Non-fatal
 
+                    # Track blob uploads for download-link injection
+                    if fn_name in _BLOB_UPLOAD_TOOLS:
+                        blob_uploads.append(tool_result)
+
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
@@ -262,10 +345,43 @@ async def run_agent_with_openai(
 
             try:
                 response = await openai_client.chat.completions.create(**kwargs)
-                return response.choices[0].message.content or ""
+                _total_llm_calls += 1
+                if hasattr(response, 'usage') and response.usage:
+                    _total_prompt_tokens += getattr(response.usage, 'prompt_tokens', 0) or 0
+                    _total_completion_tokens += getattr(response.usage, 'completion_tokens', 0) or 0
+                final_text = response.choices[0].message.content or ""
+                if blob_uploads:
+                    final_text = _append_blob_uploads(
+                        final_text, blob_uploads,
+                    )
+                # Auto-generate Word/Excel documents from report output
+                try:
+                    doc_uploads = await generate_and_upload_documents(
+                        final_text, agent_name, subtask_label=subtask_label,
+                    )
+                    if doc_uploads:
+                        final_text = _append_blob_uploads(
+                            final_text, doc_uploads,
+                        )
+                except Exception:
+                    logger.exception("openai_doc_gen_failed", agent=agent_name)
+                return {
+                    "text": final_text,
+                    "usage": {
+                        "prompt_tokens": _total_prompt_tokens,
+                        "completion_tokens": _total_completion_tokens,
+                        "total_tokens": _total_prompt_tokens + _total_completion_tokens,
+                        "llm_calls": _total_llm_calls,
+                    },
+                }
             except Exception:
                 logger.exception("openai_mcp_run_final_error", agent=agent_name)
-                return (
-                    "Agent completed tool execution but failed to "
-                    "generate final summary."
-                )
+                return {
+                    "text": "Agent completed tool execution but failed to generate final summary.",
+                    "usage": {
+                        "prompt_tokens": _total_prompt_tokens,
+                        "completion_tokens": _total_completion_tokens,
+                        "total_tokens": _total_prompt_tokens + _total_completion_tokens,
+                        "llm_calls": _total_llm_calls,
+                    },
+                }

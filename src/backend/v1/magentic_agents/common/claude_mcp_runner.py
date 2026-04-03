@@ -11,9 +11,16 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Coroutine
 
+# Tool names whose results are blob upload confirmations.
+# When detected, the raw JSON is appended to the final output so the
+# frontend can render download links automatically.
+_BLOB_UPLOAD_TOOLS = {"storage_upload_blob"}
+
 import structlog
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+
+from .doc_generator import generate_and_upload_documents
 
 logger = structlog.get_logger(__name__)
 
@@ -64,6 +71,40 @@ def _extract_text_from_call_result(result: Any) -> str:
     return "\n".join(parts)
 
 
+def _append_blob_uploads(final_text: str, blob_uploads: list[str]) -> str:
+    """Append blob upload JSON metadata to the agent's final text.
+
+    The frontend ``FormattedContent`` component automatically detects
+    inline ``{"status":"uploaded","container":"...","blob":"..."}`` JSON
+    and renders a download card with a link.  By appending the raw tool
+    results here we guarantee the user always sees a clickable download
+    link, even when the LLM summarises the upload in prose without
+    including the raw JSON.
+    """
+    # De-duplicate by (container, blob) in case the same blob was
+    # uploaded more than once across retries.
+    seen: set[tuple[str, str]] = set()
+    unique: list[str] = []
+    for raw in blob_uploads:
+        try:
+            obj = json.loads(raw)
+            key = (obj.get("container", ""), obj.get("blob", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            # Check the raw JSON isn't already present in the LLM output
+            if raw in final_text:
+                continue
+            unique.append(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    if not unique:
+        return final_text
+
+    return final_text + "\n\n" + "\n".join(unique)
+
+
 async def run_agent_with_claude(
     *,
     anthropic_client: Any,
@@ -74,7 +115,8 @@ async def run_agent_with_claude(
     tool_names: list[str],
     agent_name: str = "agent",
     on_progress: ProgressCallback | None = None,
-) -> str:
+    subtask_label: str | None = None,
+) -> dict[str, Any]:
     """Run an agent task using Anthropic Claude with MCP tool calling.
 
     This is the main entry point. It:
@@ -95,10 +137,15 @@ async def run_agent_with_claude(
         on_progress: Optional async callback for streaming tool-call progress.
 
     Returns:
-        The final text response from Claude after all tool calls.
+        A dict with 'text' (final response) and 'usage' (token counts).
     """
     sse_url = f"{mcp_server_url.rstrip('/')}/sse"
     requested = set(tool_names) if tool_names else None
+
+    # Accumulate token usage across all LLM rounds
+    _total_input_tokens = 0
+    _total_output_tokens = 0
+    _total_llm_calls = 0
 
     logger.info(
         "claude_mcp_run_start",
@@ -127,6 +174,9 @@ async def run_agent_with_claude(
                 total_mcp_tools=len(tools_result.tools),
                 agent_tools=len(claude_tools),
             )
+
+            # Track blob uploads so we can surface download links
+            blob_uploads: list[str] = []
 
             # 2. Build initial messages
             messages: list[dict[str, Any]] = [
@@ -161,6 +211,12 @@ async def run_agent_with_claude(
                     )
                     raise
 
+                # Accumulate token usage from this round
+                _total_llm_calls += 1
+                if hasattr(response, 'usage') and response.usage:
+                    _total_input_tokens += getattr(response.usage, 'input_tokens', 0) or 0
+                    _total_output_tokens += getattr(response.usage, 'output_tokens', 0) or 0
+
                 # Check stop reason
                 stop_reason = response.stop_reason
 
@@ -176,13 +232,41 @@ async def run_agent_with_claude(
                 # If no tool calls (end_turn or max_tokens), return final text
                 if not tool_uses or stop_reason == "end_turn":
                     final_text = "\n".join(text_parts)
+                    # Append blob upload metadata so frontend renders
+                    # download links even if the LLM omits the raw JSON.
+                    if blob_uploads:
+                        final_text = _append_blob_uploads(
+                            final_text, blob_uploads,
+                        )
+                    # Auto-generate Word/Excel documents from report output
+                    try:
+                        doc_uploads = await generate_and_upload_documents(
+                            final_text, agent_name, subtask_label=subtask_label,
+                        )
+                        if doc_uploads:
+                            blob_uploads.extend(doc_uploads)
+                            final_text = _append_blob_uploads(
+                                final_text, doc_uploads,
+                            )
+                    except Exception:
+                        logger.exception("claude_doc_gen_failed", agent=agent_name)
                     logger.info(
                         "claude_mcp_run_complete",
                         agent=agent_name,
                         rounds=round_num + 1,
                         response_length=len(final_text),
+                        prompt_tokens=_total_input_tokens,
+                        completion_tokens=_total_output_tokens,
                     )
-                    return final_text
+                    return {
+                        "text": final_text,
+                        "usage": {
+                            "prompt_tokens": _total_input_tokens,
+                            "completion_tokens": _total_output_tokens,
+                            "total_tokens": _total_input_tokens + _total_output_tokens,
+                            "llm_calls": _total_llm_calls,
+                        },
+                    }
 
                 # Append the assistant message (with all content blocks).
                 # We manually extract only the fields the API accepts —
@@ -261,6 +345,10 @@ async def run_agent_with_claude(
                         except Exception:
                             pass  # Non-fatal
 
+                    # Track blob uploads for download-link injection
+                    if fn_name in _BLOB_UPLOAD_TOOLS:
+                        blob_uploads.append(tool_result_text)
+
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": tool_use_id,
@@ -295,14 +383,47 @@ async def run_agent_with_claude(
             try:
                 async with anthropic_client.messages.stream(**kwargs) as stream:
                     response = await stream.get_final_message()
+                _total_llm_calls += 1
+                if hasattr(response, 'usage') and response.usage:
+                    _total_input_tokens += getattr(response.usage, 'input_tokens', 0) or 0
+                    _total_output_tokens += getattr(response.usage, 'output_tokens', 0) or 0
                 text_parts = []
                 for block in response.content:
                     if block.type == "text":
                         text_parts.append(block.text)
-                return "\n".join(text_parts)
+                final_text = "\n".join(text_parts)
+                if blob_uploads:
+                    final_text = _append_blob_uploads(
+                        final_text, blob_uploads,
+                    )
+                # Auto-generate Word/Excel documents from report output
+                try:
+                    doc_uploads = await generate_and_upload_documents(
+                        final_text, agent_name, subtask_label=subtask_label,
+                    )
+                    if doc_uploads:
+                        final_text = _append_blob_uploads(
+                            final_text, doc_uploads,
+                        )
+                except Exception:
+                    logger.exception("claude_doc_gen_failed", agent=agent_name)
+                return {
+                    "text": final_text,
+                    "usage": {
+                        "prompt_tokens": _total_input_tokens,
+                        "completion_tokens": _total_output_tokens,
+                        "total_tokens": _total_input_tokens + _total_output_tokens,
+                        "llm_calls": _total_llm_calls,
+                    },
+                }
             except Exception:
                 logger.exception("claude_mcp_run_final_error", agent=agent_name)
-                return (
-                    "Agent completed tool execution but failed to "
-                    "generate final summary."
-                )
+                return {
+                    "text": "Agent completed tool execution but failed to generate final summary.",
+                    "usage": {
+                        "prompt_tokens": _total_input_tokens,
+                        "completion_tokens": _total_output_tokens,
+                        "total_tokens": _total_input_tokens + _total_output_tokens,
+                        "llm_calls": _total_llm_calls,
+                    },
+                }

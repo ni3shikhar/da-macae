@@ -14,6 +14,7 @@ import {
   Textarea,
   ProgressBar,
   Divider,
+  Switch,
   makeStyles,
   tokens,
   mergeClasses,
@@ -32,6 +33,7 @@ import {
   ArrowSync24Regular,
   History24Regular,
   DismissCircle24Regular,
+  FastForward24Filled,
 } from "@fluentui/react-icons";
 import { useNavigate, useParams } from "react-router-dom";
 import type { Plan, PlanStep, AgentMessage } from "../models";
@@ -316,6 +318,17 @@ const useStyles = makeStyles({
     textTransform: "uppercase" as const,
     letterSpacing: "0.5px",
   },
+  processingIndicator: {
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+    padding: "12px 16px",
+    borderRadius: "8px",
+    backgroundColor: tokens.colorBrandBackground2,
+    alignSelf: "flex-start",
+    maxWidth: "80%",
+    animation: "pulse 1.5s ease-in-out infinite",
+  },
 });
 
 const USER_ID = "default-user";
@@ -393,6 +406,9 @@ interface SubTaskInfo {
   id: string;
   label: string;
   status: "pending" | "in_progress" | "completed" | "failed";
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
 }
 
 /** Info about a sub-task awaiting user input before the next one runs. */
@@ -417,6 +433,10 @@ interface StepLiveInfo {
   subtasks?: SubTaskInfo[];
   awaitingApproval?: boolean;
   awaitingSubtaskInput?: SubtaskInputRequest;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  llmCalls?: number;
 }
 
 /* ── Component ───────────────────────────────────────────────────── */
@@ -437,8 +457,106 @@ export default function PlanPage() {
   const [stepLiveInfo, setStepLiveInfo] = useState<Map<number, StepLiveInfo>>(new Map());
   const [subtaskAnswerText, setSubtaskAnswerText] = useState<Map<number, string>>(new Map());
   const [cancelling, setCancelling] = useState(false);
+  const [autoApproveSteps, setAutoApproveSteps] = useState<Set<number>>(new Set());
+  const autoApproveRef = useRef<Set<number>>(new Set());
   const messagesEnd = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocketService | null>(null);
+
+  // Keep ref in sync with state so WS handler reads latest value
+  useEffect(() => {
+    autoApproveRef.current = autoApproveSteps;
+  }, [autoApproveSteps]);
+
+  // Toggle auto-approve for a step's sub-tasks
+  const toggleAutoApprove = useCallback((stepNum: number) => {
+    setAutoApproveSteps((prev) => {
+      const next = new Set(prev);
+      if (next.has(stepNum)) {
+        next.delete(stepNum);
+      } else {
+        next.add(stepNum);
+      }
+      return next;
+    });
+  }, []);
+
+  // ── Retroactive auto-approve effect ──
+  // When auto-approve is toggled ON for a step that is already awaiting
+  // approval or subtask input, immediately fire the approval so the user
+  // doesn't have to wait for a future WS message.
+  useEffect(() => {
+    if (!plan || autoApproveSteps.size === 0) return;
+
+    for (const stepNum of autoApproveSteps) {
+      const info = stepLiveInfo.get(stepNum);
+      if (!info) continue;
+
+      // Retroactively approve the step if it's awaiting step-level approval
+      if (info.awaitingApproval) {
+        console.log(`[auto-approve] Retroactively approving step ${stepNum}`);
+        approveStep(plan.plan_id, USER_ID, stepNum, true, "")
+          .then(() => {
+            // Clear the awaiting flag
+            setStepLiveInfo((prev) => {
+              const next = new Map(prev);
+              const existing = next.get(stepNum);
+              if (existing) {
+                next.set(stepNum, { ...existing, awaitingApproval: false });
+              }
+              return next;
+            });
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: crypto.randomUUID(),
+                plan_id: plan.plan_id,
+                step_id: "",
+                agent: "system",
+                content: `Auto-approved Step ${stepNum} — execution will begin.`,
+                timestamp: new Date().toISOString(),
+              },
+            ]);
+          })
+          .catch((err) => console.error("Retroactive auto-approve step failed:", err));
+        // Only fire once per step — the flag will be cleared by .then()
+        continue;
+      }
+
+      // Retroactively continue the subtask if it's awaiting subtask input
+      if (info.awaitingSubtaskInput) {
+        const subtaskId = info.awaitingSubtaskInput.subtaskId;
+        const label = info.awaitingSubtaskInput.subtaskLabel;
+        const idx = info.awaitingSubtaskInput.subtaskIndex + 1;
+        const total = info.awaitingSubtaskInput.totalSubtasks;
+        console.log(`[auto-approve] Retroactively continuing subtask ${subtaskId} for step ${stepNum}`);
+        sendSubtaskResponse(plan.plan_id, USER_ID, stepNum, subtaskId, "continue", "")
+          .then(() => {
+            // Clear the awaiting flag
+            setStepLiveInfo((prev) => {
+              const next = new Map(prev);
+              const existing = next.get(stepNum);
+              if (existing) {
+                next.set(stepNum, { ...existing, awaitingSubtaskInput: undefined });
+              }
+              return next;
+            });
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: crypto.randomUUID(),
+                plan_id: plan.plan_id,
+                step_id: "",
+                agent: "system",
+                content: `Auto-approved sub-task ${idx}/${total}: "${label}" — continuing.`,
+                timestamp: new Date().toISOString(),
+              },
+            ]);
+          })
+          .catch((err) => console.error("Retroactive auto-approve subtask failed:", err));
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoApproveSteps, stepLiveInfo, plan?.plan_id]);
 
   // Toggle a step card expansion
   const toggleStep = useCallback((stepNum: number) => {
@@ -509,6 +627,7 @@ export default function PlanPage() {
         const pid = plan.plan_id || plan.id;
         const refreshed = await getPlan(pid, USER_ID);
         setPlan(refreshed);
+        hydrateSubtasks(refreshed);
         const msgs = await getAgentMessages(pid);
         if (msgs.length > messages.length) {
           setMessages(msgs);
@@ -521,6 +640,52 @@ export default function PlanPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plan?.overall_status, plan?.plan_id]);
 
+  // Hydrate stepLiveInfo from persisted subtask data on a loaded plan.
+  // Preserves token usage from both the persisted plan data and any
+  // existing WebSocket-derived state so that polling doesn't wipe tokens.
+  const hydrateSubtasks = useCallback((p: Plan) => {
+    if (!p.m_plan?.steps) return;
+    setStepLiveInfo((prev) => {
+      const next = new Map(prev);
+      for (const s of p.m_plan!.steps) {
+        if (s.subtasks && s.subtasks.length > 0) {
+          const existing = next.get(s.step_number);
+          // Merge subtask token data: prefer existing WS state, fall back to persisted
+          const existingSubtaskMap = new Map(
+            (existing?.subtasks ?? []).map((st) => [st.id, st])
+          );
+          next.set(s.step_number, {
+            status: existing?.status ?? s.status ?? "",
+            message: existing?.message ?? "",
+            duration: existing?.duration ?? "",
+            output: existing?.output ?? s.output ?? "",
+            error: existing?.error ?? s.error ?? "",
+            subtasks: s.subtasks.map((st) => {
+              const ws = existingSubtaskMap.get(st.id);
+              return {
+                id: st.id,
+                label: st.label,
+                status: st.status as "pending" | "in_progress" | "completed" | "failed",
+                promptTokens: ws?.promptTokens || st.prompt_tokens || 0,
+                completionTokens: ws?.completionTokens || st.completion_tokens || 0,
+                totalTokens: ws?.totalTokens || st.total_tokens || 0,
+              };
+            }),
+            toolCalls: existing?.toolCalls,
+            awaitingApproval: existing?.awaitingApproval,
+            awaitingSubtaskInput: existing?.awaitingSubtaskInput,
+            // Preserve step-level tokens: prefer WS state, fall back to persisted
+            promptTokens: existing?.promptTokens || s.prompt_tokens || 0,
+            completionTokens: existing?.completionTokens || s.completion_tokens || 0,
+            totalTokens: existing?.totalTokens || s.total_tokens || 0,
+            llmCalls: existing?.llmCalls || s.llm_calls || 0,
+          });
+        }
+      }
+      return next;
+    });
+  }, []);
+
   // Load plan
   useEffect(() => {
     const fetchPlan = async () => {
@@ -528,6 +693,7 @@ export default function PlanPage() {
         if (planId) {
           const p = await getPlan(planId, USER_ID);
           setPlan(p);
+          hydrateSubtasks(p);
           const msgs = await getAgentMessages(planId);
           setMessages(msgs);
         } else {
@@ -536,6 +702,7 @@ export default function PlanPage() {
           if (plans.length > 0) {
             const latest = plans[plans.length - 1];
             setPlan(latest);
+            hydrateSubtasks(latest);
             const msgs = await getAgentMessages(latest.id);
             setMessages(msgs);
           }
@@ -547,7 +714,7 @@ export default function PlanPage() {
       }
     };
     fetchPlan();
-  }, [planId]);
+  }, [planId, hydrateSubtasks]);
 
   // WebSocket connection
   useEffect(() => {
@@ -578,12 +745,22 @@ export default function PlanPage() {
           if (stepNum != null) {
             setStepLiveInfo((prev) => {
               const next = new Map(prev);
+              const existing = next.get(stepNum);
+              // Preserve subtasks, toolCalls, and awaitingSubtaskInput when updating step status
               next.set(stepNum, {
                 status: data.status as string,
                 message: (data.message as string) ?? "",
                 duration: (data.duration as string) ?? "",
                 output: (data.output as string) ?? "",
                 error: (data.error as string) ?? "",
+                subtasks: existing?.subtasks,
+                toolCalls: existing?.toolCalls,
+                awaitingApproval: existing?.awaitingApproval,
+                awaitingSubtaskInput: existing?.awaitingSubtaskInput,
+                promptTokens: (data.prompt_tokens as number) || existing?.promptTokens || 0,
+                completionTokens: (data.completion_tokens as number) || existing?.completionTokens || 0,
+                totalTokens: (data.total_tokens as number) || existing?.totalTokens || 0,
+                llmCalls: (data.llm_calls as number) || existing?.llmCalls || 0,
               });
               return next;
             });
@@ -594,6 +771,25 @@ export default function PlanPage() {
                 next.add(stepNum);
                 return next;
               });
+            }
+            // Add chat message with output when step completes
+            if (data.status === StepStatus.COMPLETED && data.output) {
+              const stepAgent = plan?.m_plan?.steps.find(s => s.step_number === stepNum)?.agent || "Agent";
+              const stepTask = plan?.m_plan?.steps.find(s => s.step_number === stepNum)?.task || "";
+              const outputStr = data.output as string;
+              // Show full output in chat (FormattedContent will handle rendering)
+              const chatContent = `**Step ${stepNum} completed:** ${stepTask}\n\n${outputStr}`;
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: crypto.randomUUID(),
+                  plan_id: (data.plan_id as string) ?? plan?.plan_id ?? "",
+                  step_id: "",
+                  agent: stepAgent,
+                  content: chatContent,
+                  timestamp: new Date().toISOString(),
+                },
+              ]);
             }
           }
           break;
@@ -670,9 +866,27 @@ export default function PlanPage() {
               const existing = next.get(suStep);
               if (!existing?.subtasks) return prev;
               const subtasks = existing.subtasks.map((st) =>
-                st.id === subtaskId ? { ...st, status: subtaskStatus } : st
+                st.id === subtaskId
+                  ? {
+                      ...st,
+                      status: subtaskStatus,
+                      promptTokens: (data.prompt_tokens as number) || 0,
+                      completionTokens: (data.completion_tokens as number) || 0,
+                      totalTokens: (data.total_tokens as number) || 0,
+                    }
+                  : st
               );
-              next.set(suStep, { ...existing, subtasks });
+              // Update step-level running totals from the backend
+              const stepPrompt = (data.step_prompt_tokens as number) || existing.promptTokens || 0;
+              const stepCompletion = (data.step_completion_tokens as number) || existing.completionTokens || 0;
+              const stepTotal = (data.step_total_tokens as number) || existing.totalTokens || 0;
+              next.set(suStep, {
+                ...existing,
+                subtasks,
+                promptTokens: stepPrompt,
+                completionTokens: stepCompletion,
+                totalTokens: stepTotal,
+              });
               return next;
             });
           }
@@ -682,6 +896,55 @@ export default function PlanPage() {
           // A sub-task completed — system is waiting for user input before proceeding
           const siStep = data.step_number as number;
           if (siStep != null) {
+            // Check if auto-approve is enabled for this step
+            const isAutoApproved = autoApproveRef.current.has(siStep);
+
+            if (isAutoApproved) {
+              // Auto-approve: immediately send "continue" without showing the input gate
+              const siPlanId = (data.plan_id as string) ?? "";
+              const siSubtaskId = data.subtask_id as string;
+              sendSubtaskResponse(
+                siPlanId,
+                USER_ID,
+                siStep,
+                siSubtaskId,
+                "continue",
+                "",
+              ).catch((err) => {
+                console.error("Auto-approve subtask failed:", err);
+              });
+
+              // Still show the chat message but mark it as auto-approved
+              const stIdx = (data.subtask_index as number) + 1;
+              const stTotal = data.total_subtasks as number;
+              const isLast = (data.is_last_subtask as boolean) || false;
+              const resultPreview = (data.result_preview as string) || "";
+
+              let chatMsg = `**Sub-task ${stIdx}/${stTotal} auto-approved:** "${data.subtask_label}"`;
+              if (resultPreview) {
+                chatMsg += `\n\n**Result:**\n${resultPreview}`;
+                if (resultPreview.length >= 300) {
+                  chatMsg += "\n\n*...output truncated. See step details for full output.*";
+                }
+              }
+              if (isLast) {
+                chatMsg += "\n\n*All sub-tasks auto-approved and completed.*";
+              }
+
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: crypto.randomUUID(),
+                  plan_id: siPlanId,
+                  step_id: "",
+                  agent: "system",
+                  content: chatMsg,
+                  timestamp: new Date().toISOString(),
+                },
+              ]);
+              break;
+            }
+
             setStepLiveInfo((prev) => {
               const next = new Map(prev);
               const existing = next.get(siStep) || { status: "in_progress", message: "" };
@@ -705,20 +968,37 @@ export default function PlanPage() {
               next.add(siStep);
               return next;
             });
-            // System message — conversational prompt
+            // System message — conversational prompt with result preview
             const stIdx = (data.subtask_index as number) + 1;
             const stTotal = data.total_subtasks as number;
             const isLast = (data.is_last_subtask as boolean) || false;
-            const chatMsg = isLast
-              ? `Sub-task ${stIdx}/${stTotal} completed: "${data.subtask_label}". All sub-tasks done — provide any final input or confirm to finish.`
-              : `Sub-task ${stIdx}/${stTotal} completed: "${data.subtask_label}". Review the result and provide input, or continue to next: "${data.next_subtask}".`;
+            const resultPreview = (data.result_preview as string) || "";
+            const stepAgent = plan?.m_plan?.steps.find(s => s.step_number === siStep)?.agent || "Agent";
+            
+            // Build chat message with result preview
+            let chatMsg = isLast
+              ? `**Sub-task ${stIdx}/${stTotal} completed:** "${data.subtask_label}"\n\nAll sub-tasks done — provide any final input or confirm to finish.`
+              : `**Sub-task ${stIdx}/${stTotal} completed:** "${data.subtask_label}"`;
+            
+            // Append result preview if available
+            if (resultPreview) {
+              chatMsg += `\n\n**Result:**\n${resultPreview}`;
+              if (resultPreview.length >= 300) {
+                chatMsg += "\n\n*...output truncated. See step details for full output.*";
+              }
+            }
+            
+            if (!isLast && data.next_subtask) {
+              chatMsg += `\n\n**Next:** ${data.next_subtask}`;
+            }
+            
             setMessages((prev) => [
               ...prev,
               {
                 id: crypto.randomUUID(),
                 plan_id: (data.plan_id as string) ?? "",
                 step_id: "",
-                agent: "system",
+                agent: stepAgent,
                 content: chatMsg,
                 timestamp: new Date().toISOString(),
               },
@@ -730,6 +1010,28 @@ export default function PlanPage() {
           // Agent sub-tasks generated — waiting for user to approve/reject this step
           const saStep = data.step_number as number;
           if (saStep != null) {
+            const isStepAutoApproved = autoApproveRef.current.has(saStep);
+
+            if (isStepAutoApproved) {
+              // Auto-approve step immediately and log to chat
+              const saPlanId = (data.plan_id as string) ?? plan?.plan_id ?? "";
+              approveStep(saPlanId, USER_ID, saStep, true, "").catch((err) => {
+                console.error("Auto-approve step failed:", err);
+              });
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: crypto.randomUUID(),
+                  plan_id: saPlanId,
+                  step_id: "",
+                  agent: "system",
+                  content: `Auto-approved agent "${data.agent}" (Step ${saStep}) — execution will begin.`,
+                  timestamp: new Date().toISOString(),
+                },
+              ]);
+              break;
+            }
+
             setStepLiveInfo((prev) => {
               const next = new Map(prev);
               const existing = next.get(saStep) || { status: "in_progress", message: "" };
@@ -960,7 +1262,7 @@ export default function PlanPage() {
 
   // Handle per-step (per-agent) approval after sub-task review
   const handleStepApproval = useCallback(
-    async (stepNumber: number, approved: boolean) => {
+    async (stepNumber: number, approved: boolean, autoApproveAll: boolean = false) => {
       if (!plan) return;
       try {
         await approveStep(
@@ -968,7 +1270,7 @@ export default function PlanPage() {
           USER_ID,
           stepNumber,
           approved,
-          approved ? "" : "User rejected step"
+          autoApproveAll ? "__auto_approve_all__" : (approved ? "" : "User rejected step")
         );
         // Clear the awaiting flag immediately
         setStepLiveInfo((prev) => {
@@ -988,9 +1290,11 @@ export default function PlanPage() {
             plan_id: plan.plan_id,
             step_id: "",
             agent: "user",
-            content: approved
-              ? `Approved ${stepAgent} (Step ${stepNumber}) — execution will begin.`
-              : `Rejected ${stepAgent} (Step ${stepNumber}) — step will be skipped.`,
+            content: autoApproveAll
+              ? `Auto-approved all sub-tasks for ${stepAgent} (Step ${stepNumber}) — executing without pauses.`
+              : approved
+                ? `Approved ${stepAgent} (Step ${stepNumber}) — execution will begin.`
+                : `Rejected ${stepAgent} (Step ${stepNumber}) — step will be skipped.`,
             timestamp: new Date().toISOString(),
           },
         ]);
@@ -1013,20 +1317,22 @@ export default function PlanPage() {
     [plan]
   );
 
-  // Handle per-subtask response (continue / skip / answer)
+  // Handle per-subtask response (continue / skip / answer / auto_approve_all)
   const handleSubtaskResponse = useCallback(
-    async (stepNumber: number, subtaskId: string, action: "continue" | "skip" | "answer") => {
+    async (stepNumber: number, subtaskId: string, action: "continue" | "skip" | "answer" | "auto_approve_all") => {
       if (!plan) return;
       const answerText = (subtaskAnswerText.get(stepNumber) || "").trim();
-      // Always send the answer text if the user typed something,
-      // regardless of which button they clicked (Send & Continue vs Continue)
+      // For auto_approve_all, send as-is (don't override with "answer")
+      const effectiveAction = action === "auto_approve_all"
+        ? "auto_approve_all"
+        : (answerText ? "answer" : action);
       try {
         await sendSubtaskResponse(
           plan.plan_id,
           USER_ID,
           stepNumber,
           subtaskId,
-          answerText ? "answer" : action,
+          effectiveAction,
           answerText,
         );
         // Clear the awaiting flag
@@ -1045,8 +1351,8 @@ export default function PlanPage() {
           return next;
         });
         // User message in chat
-        const effectiveAction = answerText ? "answer" : action;
         const label = effectiveAction === "answer" ? `Provided input: "${answerText}"` :
+          effectiveAction === "auto_approve_all" ? "Auto-approving all remaining sub-tasks" :
           action === "skip" ? "Skipping remaining sub-tasks" : "Continue to next sub-task";
         setMessages((prev) => [
           ...prev,
@@ -1132,8 +1438,17 @@ export default function PlanPage() {
               </div>
             </div>
 
-            {/* Status icon + duration + expand toggle */}
+            {/* Status icon + duration + tokens + expand toggle */}
             <div className={styles.stepMeta}>
+              {(liveInfo?.totalTokens ?? 0) > 0 && (
+                <span
+                  className={styles.stepDuration}
+                  title={`Prompt: ${(liveInfo?.promptTokens ?? 0).toLocaleString()} · Completion: ${(liveInfo?.completionTokens ?? 0).toLocaleString()}`}
+                  style={{ color: tokens.colorNeutralForeground3 }}
+                >
+                  🪙 {(liveInfo?.totalTokens ?? 0).toLocaleString()}
+                </span>
+              )}
               {duration && (
                 <span className={styles.stepDuration}>
                   <Clock24Regular style={{ width: 14, height: 14 }} />
@@ -1153,6 +1468,21 @@ export default function PlanPage() {
               />
             </div>
           </div>
+
+          {/* Auto-approve toggle — shown for pending/running steps */}
+          {(step.status === StepStatus.PENDING || isRunning) && (
+            <div
+              style={{ paddingLeft: "36px", marginTop: "4px" }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Switch
+                checked={autoApproveSteps.has(step.step_number)}
+                onChange={() => toggleAutoApprove(step.step_number)}
+                label="Auto-approve all sub-tasks"
+                style={{ fontSize: tokens.fontSizeBase200 }}
+              />
+            </div>
+          )}
 
           {/* Running indicator */}
           {isRunning && !liveInfo?.subtasks?.length && !liveInfo?.awaitingApproval && (
@@ -1221,9 +1551,22 @@ export default function PlanPage() {
                     <span style={{
                       fontWeight: st.status === "in_progress" ? 600 : 400,
                       textDecoration: st.status === "completed" ? "none" : "none",
+                      flex: 1,
                     }}>
                       {st.label}
                     </span>
+                    {st.status === "completed" && (st.totalTokens ?? 0) > 0 && (
+                      <span
+                        style={{
+                          fontSize: tokens.fontSizeBase100,
+                          color: tokens.colorNeutralForeground4,
+                          whiteSpace: "nowrap",
+                        }}
+                        title={`Prompt: ${(st.promptTokens ?? 0).toLocaleString()} · Completion: ${(st.completionTokens ?? 0).toLocaleString()}`}
+                      >
+                        🪙 {(st.totalTokens ?? 0).toLocaleString()}
+                      </span>
+                    )}
                   </div>
                 );
               })}
@@ -1235,41 +1578,57 @@ export default function PlanPage() {
             <div
               style={{
                 marginTop: "10px",
-                paddingLeft: "36px",
                 display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                padding: "8px 12px 8px 36px",
+                flexDirection: "column",
+                gap: "10px",
+                padding: "14px 16px 14px 36px",
                 backgroundColor: tokens.colorNeutralBackground4,
                 borderRadius: tokens.borderRadiusMedium,
+                border: `1px solid ${tokens.colorBrandStroke1}`,
               }}
               onClick={(e) => e.stopPropagation()}
             >
-              <Body2 style={{ flexGrow: 1, fontWeight: 600, color: tokens.colorBrandForeground1 }}>
-                Review sub-tasks above and approve to execute:
+              <Body2 style={{ fontWeight: 600, color: tokens.colorBrandForeground1 }}>
+                Review sub-tasks above and choose how to proceed:
               </Body2>
-              <Button
-                appearance="primary"
-                size="small"
-                icon={<Checkmark24Regular />}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleStepApproval(step.step_number, true);
-                }}
-              >
-                Approve
-              </Button>
-              <Button
-                appearance="secondary"
-                size="small"
-                icon={<Dismiss24Regular />}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleStepApproval(step.step_number, false);
-                }}
-              >
-                Skip
-              </Button>
+              <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end", flexWrap: "wrap" }}>
+                <Button
+                  appearance="primary"
+                  size="small"
+                  icon={<FastForward24Filled />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleStepApproval(step.step_number, true, true);
+                  }}
+                  title="Approve and run all sub-tasks without pausing for input"
+                >
+                  Auto-approve All
+                </Button>
+                <Button
+                  appearance="primary"
+                  size="small"
+                  icon={<ArrowCircleRight24Filled />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleStepApproval(step.step_number, true);
+                  }}
+                  title="Approve and pause after each sub-task for review"
+                >
+                  Continue
+                </Button>
+                <Button
+                  appearance="secondary"
+                  size="small"
+                  icon={<Dismiss24Regular />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleStepApproval(step.step_number, false);
+                  }}
+                  title="Skip this agent step entirely"
+                >
+                  Skip
+                </Button>
+              </div>
             </div>
           )}
 
@@ -1317,7 +1676,7 @@ export default function PlanPage() {
                 style={{ minHeight: "56px", fontSize: tokens.fontSizeBase200 }}
                 resize="vertical"
               />
-              <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+              <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end", flexWrap: "wrap" }}>
                 {(subtaskAnswerText.get(step.step_number) || "").trim() && (
                   <Button
                     appearance="primary"
@@ -1333,6 +1692,24 @@ export default function PlanPage() {
                     }}
                   >
                     Send & Continue
+                  </Button>
+                )}
+                {!liveInfo.awaitingSubtaskInput.isLastSubtask && (
+                  <Button
+                    appearance="primary"
+                    size="small"
+                    icon={<FastForward24Filled />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleSubtaskResponse(
+                        step.step_number,
+                        liveInfo!.awaitingSubtaskInput!.subtaskId,
+                        "auto_approve_all"
+                      );
+                    }}
+                    title="Run all remaining sub-tasks without stopping"
+                  >
+                    Auto-approve All
                   </Button>
                 )}
                 <Button
@@ -1364,7 +1741,7 @@ export default function PlanPage() {
                       );
                     }}
                   >
-                    Skip Remaining
+                    Skip
                   </Button>
                 )}
               </div>
@@ -1637,6 +2014,32 @@ export default function PlanPage() {
                 </div>
               );
             })}
+            {/* Processing indicator when subtasks are executing */}
+            {(() => {
+              // Find currently executing step with in-progress subtasks
+              const activeStep = Array.from(stepLiveInfo.entries()).find(
+                ([, info]) => info.status === "in_progress" && info.subtasks?.some(st => st.status === "in_progress")
+              );
+              if (!activeStep) return null;
+              const [stepNum, info] = activeStep;
+              const activeSubtask = info.subtasks?.find(st => st.status === "in_progress");
+              const stepAgent = plan?.m_plan?.steps.find(s => s.step_number === stepNum)?.agent || "Agent";
+              return (
+                <div className={styles.processingIndicator}>
+                  <Spinner size="small" />
+                  <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                    <Body2 style={{ fontWeight: 600, color: tokens.colorBrandForeground1 }}>
+                      {stepAgent} is working...
+                    </Body2>
+                    {activeSubtask && (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>
+                        {activeSubtask.label}
+                      </Caption1>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
             <div ref={messagesEnd} />
           </div>
 
