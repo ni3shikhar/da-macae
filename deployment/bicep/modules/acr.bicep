@@ -23,7 +23,8 @@ param uniqueSuffix string
 // ── Naming ────────────────────────────────────────────────────────────────
 
 // ACR names must be alphanumeric only, globally unique
-var acrName = '${projectName}acr${uniqueSuffix}'
+var envTag = environment == 'prod' ? '' : environment
+var acrName = '${projectName}acr${uniqueSuffix}${envTag}'
 
 // ── Configuration per environment ───────────────────────────────────────────
 
