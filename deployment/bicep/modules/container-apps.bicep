@@ -15,11 +15,16 @@ param environment string
 @description('Azure region')
 param location string
 
-@description('ACR login server')
+@description('ACR login server (empty string for first deploy)')
 param acrLoginServer string
 
 @description('Log Analytics workspace name')
 param logAnalyticsWorkspaceName string
+
+// Use mcr placeholder if no ACR images exist yet (first deploy)
+var backendImage = acrLoginServer != '' ? '${acrLoginServer}/agentra-backend:latest' : 'mcr.microsoft.com/k8se/quickstart:latest'
+var frontendImage = acrLoginServer != '' ? '${acrLoginServer}/agentra-frontend:latest' : 'mcr.microsoft.com/k8se/quickstart:latest'
+var mcpImage = acrLoginServer != '' ? '${acrLoginServer}/agentra-mcp:latest' : 'mcr.microsoft.com/k8se/quickstart:latest'
 
 @description('Resource tags')
 param tags object
@@ -66,18 +71,18 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8000
         transport: 'http'
       }
-      registries: [
+      registries: acrLoginServer != '' ? [
         {
           server: acrLoginServer
           identity: 'system'
         }
-      ]
+      ] : []
     }
     template: {
       containers: [
         {
           name: 'backend'
-          image: '${acrLoginServer}/agentra-backend:latest'
+          image: backendImage
           resources: {
             cpu: json('1.0')
             memory: '2Gi'
@@ -110,18 +115,18 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 80
         transport: 'http'
       }
-      registries: [
+      registries: acrLoginServer != '' ? [
         {
           server: acrLoginServer
           identity: 'system'
         }
-      ]
+      ] : []
     }
     template: {
       containers: [
         {
           name: 'frontend'
-          image: '${acrLoginServer}/agentra-frontend:latest'
+          image: frontendImage
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'
@@ -154,18 +159,18 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8001
         transport: 'http'
       }
-      registries: [
+      registries: acrLoginServer != '' ? [
         {
           server: acrLoginServer
           identity: 'system'
         }
-      ]
+      ] : []
     }
     template: {
       containers: [
         {
           name: 'mcp-server'
-          image: '${acrLoginServer}/agentra-mcp:latest'
+          image: mcpImage
           resources: {
             cpu: json('1.0')
             memory: '2Gi'
