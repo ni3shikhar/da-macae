@@ -36,7 +36,7 @@ param tags object = {
 // ── Naming Convention ───────────────────────────────────────────────────────
 
 // Unique suffix derived from subscription ID to avoid soft-delete name conflicts
-var uniqueSuffix = substring(uniqueString(subscription().subscriptionId, projectName), 0, 5)
+var uniqueSuffix = substring(uniqueString(subscription().subscriptionId, projectName, 'v2'), 0, 5)
 var envSuffix = environment == 'prod' ? '' : '-${environment}'
 var rgName = '${projectName}-rg${envSuffix}'
 
