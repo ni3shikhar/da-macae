@@ -44,7 +44,7 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     enableRbacAuthorization: true
     enableSoftDelete: true
     softDeleteRetentionInDays: environment == 'prod' ? 90 : 7
-    enablePurgeProtection: environment == 'prod'
+    enablePurgeProtection: environment == 'prod' ? true : null
     enabledForDeployment: false
     enabledForDiskEncryption: false
     enabledForTemplateDeployment: true
