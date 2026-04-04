@@ -40,10 +40,11 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
       name: environment == 'prod' ? 'premium' : 'standard'
     }
     tenantId: subscription().tenantId
+    createMode: 'default'
     enableRbacAuthorization: true
-    enableSoftDelete: environment == 'prod'
+    enableSoftDelete: true
     softDeleteRetentionInDays: environment == 'prod' ? 90 : 7
-    enablePurgeProtection: environment == 'prod' ? true : false
+    enablePurgeProtection: environment == 'prod'
     enabledForDeployment: false
     enabledForDiskEncryption: false
     enabledForTemplateDeployment: true
