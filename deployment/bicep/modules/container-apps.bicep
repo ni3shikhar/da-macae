@@ -21,10 +21,9 @@ param acrLoginServer string
 @description('Log Analytics workspace name')
 param logAnalyticsWorkspaceName string
 
-// Use mcr placeholder if no ACR images exist yet (first deploy)
-var backendImage = acrLoginServer != '' ? '${acrLoginServer}/agentra-backend:latest' : 'mcr.microsoft.com/k8se/quickstart:latest'
-var frontendImage = acrLoginServer != '' ? '${acrLoginServer}/agentra-frontend:latest' : 'mcr.microsoft.com/k8se/quickstart:latest'
-var mcpImage = acrLoginServer != '' ? '${acrLoginServer}/agentra-mcp:latest' : 'mcr.microsoft.com/k8se/quickstart:latest'
+// Always use public placeholder image for initial provisioning.
+// azd deploy will update containers with real ACR images afterward.
+var placeholderImage = 'mcr.microsoft.com/k8se/quickstart:latest'
 
 @description('Resource tags')
 param tags object
@@ -71,18 +70,13 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8000
         transport: 'http'
       }
-      registries: acrLoginServer != '' ? [
-        {
-          server: acrLoginServer
-          identity: 'system'
-        }
-      ] : []
+      registries: []
     }
     template: {
       containers: [
         {
           name: 'backend'
-          image: backendImage
+          image: placeholderImage
           resources: {
             cpu: json('1.0')
             memory: '2Gi'
@@ -115,18 +109,13 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 80
         transport: 'http'
       }
-      registries: acrLoginServer != '' ? [
-        {
-          server: acrLoginServer
-          identity: 'system'
-        }
-      ] : []
+      registries: []
     }
     template: {
       containers: [
         {
           name: 'frontend'
-          image: frontendImage
+          image: placeholderImage
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'
@@ -159,18 +148,13 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8001
         transport: 'http'
       }
-      registries: acrLoginServer != '' ? [
-        {
-          server: acrLoginServer
-          identity: 'system'
-        }
-      ] : []
+      registries: []
     }
     template: {
       containers: [
         {
           name: 'mcp-server'
-          image: mcpImage
+          image: placeholderImage
           resources: {
             cpu: json('1.0')
             memory: '2Gi'
