@@ -113,6 +113,15 @@ jobs:
 
           azd provision --no-prompt
 
+          # Explicitly tell azd which resource group to deploy into.
+          # Without this, azd deploy searches by env-name suffix and may fail
+          # if the subscription context isn't inherited from the provision step.
+          ENV="${{ needs.setup.outputs.environment }}"
+          RG="damacae-rg-${ENV}"
+          if [ "$ENV" == "prod" ]; then RG="damacae-rg"; fi
+          azd env set AZURE_RESOURCE_GROUP "$RG"
+          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
       # ── Refresh AZD state (when skipping infra) ─────────────────────────
       - name: Refresh AZD environment
         if: ${{ github.event.inputs.skip_infra == 'true' }}
@@ -132,6 +141,12 @@ jobs:
           azd env config set infra.parameters.adminObjectId "${{ steps.admin.outputs.object_id }}"
           azd env config set infra.parameters.environment "${{ needs.setup.outputs.environment }}"
           azd env config set infra.parameters.projectName "damacae"
+
+          ENV="${{ needs.setup.outputs.environment }}"
+          RG="damacae-rg-${ENV}"
+          if [ "$ENV" == "prod" ]; then RG="damacae-rg"; fi
+          azd env set AZURE_RESOURCE_GROUP "$RG"
+          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
           # Refresh state without deploying new resources
           azd provision --no-prompt --preview || true
@@ -198,6 +213,9 @@ jobs:
 
       # ── Deploy Applications ──────────────────────────────────────────────
       - name: AZD Deploy
+        env:
+          AZURE_ENV_NAME: ${{ needs.setup.outputs.environment }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
           azd env select ${{ needs.setup.outputs.environment }}
           azd deploy --no-prompt
@@ -261,6 +279,8 @@ jobs:
           azd env config set infra.parameters.projectName "damacae"
 
           azd provision --no-prompt
+          azd env set AZURE_RESOURCE_GROUP "damacae-rg"
+          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           azd deploy --no-prompt
 
       - name: Production deployment summary
