@@ -2,12 +2,17 @@ server {
     listen 80;
     server_name _;
 
+    # DNS_RESOLVER and BACKEND_URL are injected at container startup via envsubst.
+    # Using a variable for proxy_pass defers DNS resolution to request time so
+    # nginx starts successfully even if the backend isn't reachable yet.
+    resolver ${DNS_RESOLVER} valid=10s ipv6=off;
+
     root /usr/share/nginx/html;
     index index.html;
 
-    # API proxy to backend — BACKEND_URL injected at container startup via envsubst
     location /api/ {
-        proxy_pass ${BACKEND_URL};
+        set $backend "${BACKEND_URL}";
+        proxy_pass $backend;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -17,7 +22,8 @@ server {
 
     # WebSocket proxy — rewrite /ws/ to /api/v1/ws/ to match backend router prefix
     location /ws/ {
-        proxy_pass ${BACKEND_URL}/api/v1/ws/;
+        set $backend_ws "${BACKEND_URL}/api/v1/ws/";
+        proxy_pass $backend_ws;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
