@@ -15,9 +15,6 @@ param environment string
 @description('Azure region')
 param location string
 
-@description('ACR login server (empty string for first deploy)')
-param acrLoginServer string
-
 @description('ACR resource name — used to grant AcrPull to Container App identities')
 param acrName string
 
@@ -81,7 +78,7 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8000
         transport: 'http'
       }
-      registries: acrLoginServer != '' ? [{ server: acrLoginServer, identity: 'system' }] : []
+      registries: []
     }
     template: {
       containers: [
@@ -120,7 +117,7 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 80
         transport: 'http'
       }
-      registries: acrLoginServer != '' ? [{ server: acrLoginServer, identity: 'system' }] : []
+      registries: []
     }
     template: {
       containers: [
@@ -159,7 +156,7 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8001
         transport: 'http'
       }
-      registries: acrLoginServer != '' ? [{ server: acrLoginServer, identity: 'system' }] : []
+      registries: []
     }
     template: {
       containers: [
@@ -186,7 +183,7 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
 // ── AcrPull role assignments (system-assigned identity → ACR) ───────────────
 // Allows each Container App to pull images from ACR without admin credentials.
 
-resource backendAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (acrLoginServer != '') {
+resource backendAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (acrName != '') {
   name: guid(acr.id, backendApp.id, acrPullRoleId)
   scope: acr
   properties: {
@@ -196,7 +193,7 @@ resource backendAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = i
   }
 }
 
-resource frontendAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (acrLoginServer != '') {
+resource frontendAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (acrName != '') {
   name: guid(acr.id, frontendApp.id, acrPullRoleId)
   scope: acr
   properties: {
@@ -206,7 +203,7 @@ resource frontendAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   }
 }
 
-resource mcpAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (acrLoginServer != '') {
+resource mcpAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (acrName != '') {
   name: guid(acr.id, mcpApp.id, acrPullRoleId)
   scope: acr
   properties: {
