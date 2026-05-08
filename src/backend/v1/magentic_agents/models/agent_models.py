@@ -29,6 +29,7 @@ class AgentRunContext(BaseModel):
     thread_id: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     subtask_label: Optional[str] = None
+    is_final_step: bool = False
 
 
 class AgentRunResult(BaseModel):

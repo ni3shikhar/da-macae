@@ -382,72 +382,94 @@ async def sec_generate_excel_report(
     findings_json: str,
     subscription_id: str = "",
     subscription_name: str = "",
+    container: str = "security-reports",
+    blob_name: str = "",
 ) -> str:
     """
-    Generate an Excel security assessment report from findings JSON.
-    
+    Generate an Excel security assessment report and upload it directly to Azure Blob Storage.
+
     Args:
         findings_json: JSON string containing array of finding objects.
         subscription_id: Optional Azure subscription ID for the report.
         subscription_name: Optional Azure subscription name for the report.
-    
+        container: Blob container to upload to (default: security-reports).
+        blob_name: Blob name/path for the uploaded file. Auto-generated if empty.
+
     Returns:
-        JSON with status and base64-encoded Excel file.
+        JSON with status, container, blob (suitable for frontend download card),
+        and a findings summary.
     """
-    import base64
-    
     loop = asyncio.get_running_loop()
-    
-    def _generate():
-        try:
-            # Parse findings
-            if isinstance(findings_json, str):
-                data = json.loads(findings_json)
-            else:
-                data = findings_json
-            
-            # Extract findings array
-            if isinstance(data, list):
-                findings = data
-            elif isinstance(data, dict) and "findings" in data:
-                findings = data["findings"]
-            else:
-                findings = []
-            
-            # Generate Excel
-            excel_bytes = generate_security_report(
-                findings=findings,
-                subscription_id=subscription_id,
-                subscription_name=subscription_name,
-            )
-            
-            # Encode as base64
-            excel_b64 = base64.b64encode(excel_bytes).decode("utf-8")
-            
-            # Calculate summary stats
-            total = len(findings)
-            passed = sum(1 for f in findings if f.get("status", "").upper() == "PASS")
-            failed = sum(1 for f in findings if f.get("status", "").upper() == "FAIL")
-            manual = sum(1 for f in findings if f.get("status", "").upper() == "MANUAL_REVIEW")
-            
-            return {
-                "status": "success",
-                "filename": f"mcsb-v2-assessment-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.xlsx",
-                "excel_base64": excel_b64,
-                "size_bytes": len(excel_bytes),
-                "summary": {
-                    "total_findings": total,
-                    "passed": passed,
-                    "failed": failed,
-                    "manual_review": manual,
-                    "compliance_percentage": (passed / total * 100) if total > 0 else 0,
-                },
-            }
-        except Exception as e:
-            return {"status": "error", "error": str(e)}
-    
-    result = await loop.run_in_executor(None, _generate)
-    return json.dumps(result, default=str)
+
+    def _generate() -> tuple[bytes, list, str]:
+        if isinstance(findings_json, str):
+            data = json.loads(findings_json)
+        else:
+            data = findings_json
+
+        if isinstance(data, list):
+            findings = data
+        elif isinstance(data, dict) and "findings" in data:
+            findings = data["findings"]
+        else:
+            findings = []
+
+        excel_bytes = generate_security_report(
+            findings=findings,
+            subscription_id=subscription_id,
+            subscription_name=subscription_name,
+        )
+        auto_name = f"mcsb-v2-assessment-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.xlsx"
+        return excel_bytes, findings, auto_name
+
+    try:
+        excel_bytes, findings, auto_name = await loop.run_in_executor(None, _generate)
+    except Exception as e:
+        return json.dumps({"status": "error", "error": str(e)})
+
+    effective_blob = blob_name or auto_name
+
+    # Upload binary Excel directly — no base64 round-trip through the agent
+    try:
+        from azure.storage.blob.aio import BlobServiceClient
+
+        conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING", "")
+        if conn_str:
+            async with BlobServiceClient.from_connection_string(conn_str) as bsc:
+                cc = bsc.get_container_client(container)
+                try:
+                    await cc.create_container()
+                except Exception:
+                    pass  # already exists
+                bc = cc.get_blob_client(effective_blob)
+                await bc.upload_blob(
+                    excel_bytes,
+                    overwrite=True,
+                    content_settings={"content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+                )
+        else:
+            return json.dumps({"status": "error", "error": "AZURE_STORAGE_CONNECTION_STRING not set"})
+    except Exception as e:
+        return json.dumps({"status": "error", "error": f"Upload failed: {e}"})
+
+    total = len(findings)
+    passed = sum(1 for f in findings if f.get("status", "").upper() == "PASS")
+    failed = sum(1 for f in findings if f.get("status", "").upper() == "FAIL")
+    manual = sum(1 for f in findings if f.get("status", "").upper() == "MANUAL_REVIEW")
+
+    return json.dumps({
+        "status": "uploaded",
+        "container": container,
+        "blob": effective_blob,
+        "size_bytes": len(excel_bytes),
+        "summary": {
+            "total_findings": total,
+            "passed": passed,
+            "failed": failed,
+            "manual_review": manual,
+            "compliance_percentage": round((passed / total * 100) if total > 0 else 0, 1),
+        },
+    }, default=str)
 
 
 def register_excel_tools(mcp_server):

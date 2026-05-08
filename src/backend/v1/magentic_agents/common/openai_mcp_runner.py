@@ -15,7 +15,7 @@ from typing import Any, Callable, Coroutine
 # Tool names whose results are blob upload confirmations.
 # When detected, the raw JSON is appended to the final output so the
 # frontend can render download links automatically.
-_BLOB_UPLOAD_TOOLS = {"storage_upload_blob"}
+_BLOB_UPLOAD_TOOLS = {"storage_upload_blob", "sec_generate_excel_report"}
 
 import structlog
 from mcp import ClientSession
@@ -94,10 +94,18 @@ def _append_blob_uploads(final_text: str, blob_uploads: list[str]) -> str:
             if key in seen:
                 continue
             seen.add(key)
-            if raw in final_text:
+            # Serialize only flat fields so the frontend regex can match.
+            # The raw tool result may include nested objects (e.g. "summary")
+            # which break the frontend's JSON blob detector.
+            flat = json.dumps({
+                "status": obj.get("status", "uploaded"),
+                "container": obj["container"],
+                "blob": obj["blob"],
+            })
+            if flat in final_text or raw in final_text:
                 continue
-            unique.append(raw)
-        except (json.JSONDecodeError, TypeError):
+            unique.append(flat)
+        except (json.JSONDecodeError, TypeError, KeyError):
             continue
 
     if not unique:
@@ -117,6 +125,7 @@ async def run_agent_with_openai(
     agent_name: str = "agent",
     on_progress: ProgressCallback | None = None,
     subtask_label: str | None = None,
+    is_final_step: bool = False,
 ) -> dict[str, Any]:
     """Run an agent task using Azure OpenAI with MCP tool calling.
 
@@ -223,20 +232,19 @@ async def run_agent_with_openai(
                         final_text = _append_blob_uploads(
                             final_text, blob_uploads,
                         )
-                    # Auto-generate Word/Excel documents from report output
-                    # Show summary in chat, full details in document
-                    try:
-                        doc_result = await generate_documents_with_summary(
-                            final_text, agent_name, subtask_label=subtask_label,
-                        )
-                        if doc_result:
-                            blob_uploads.extend(doc_result.uploads)
-                            # Replace full text with summary + download links
-                            final_text = _append_blob_uploads(
-                                doc_result.summary, doc_result.uploads,
+                    # Auto-generate Word/Excel documents only at the final step
+                    if is_final_step:
+                        try:
+                            doc_result = await generate_documents_with_summary(
+                                final_text, agent_name, subtask_label=subtask_label,
                             )
-                    except Exception:
-                        logger.exception("openai_doc_gen_failed", agent=agent_name)
+                            if doc_result:
+                                blob_uploads.extend(doc_result.uploads)
+                                final_text = _append_blob_uploads(
+                                    doc_result.summary, doc_result.uploads,
+                                )
+                        except Exception:
+                            logger.exception("openai_doc_gen_failed", agent=agent_name)
                     logger.info(
                         "openai_mcp_run_complete",
                         agent=agent_name,
@@ -356,19 +364,18 @@ async def run_agent_with_openai(
                     final_text = _append_blob_uploads(
                         final_text, blob_uploads,
                     )
-                # Auto-generate Word/Excel documents from report output
-                # Show summary in chat, full details in document
-                try:
-                    doc_result = await generate_documents_with_summary(
-                        final_text, agent_name, subtask_label=subtask_label,
-                    )
-                    if doc_result:
-                        # Replace full text with summary + download links
-                        final_text = _append_blob_uploads(
-                            doc_result.summary, doc_result.uploads,
+                # Auto-generate Word/Excel documents only at the final step
+                if is_final_step:
+                    try:
+                        doc_result = await generate_documents_with_summary(
+                            final_text, agent_name, subtask_label=subtask_label,
                         )
-                except Exception:
-                    logger.exception("openai_doc_gen_failed", agent=agent_name)
+                        if doc_result:
+                            final_text = _append_blob_uploads(
+                                doc_result.summary, doc_result.uploads,
+                            )
+                    except Exception:
+                        logger.exception("openai_doc_gen_failed", agent=agent_name)
                 return {
                     "text": final_text,
                     "usage": {

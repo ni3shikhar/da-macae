@@ -46,6 +46,340 @@ from v1.orchestration.human_approval_manager import HumanApprovalManager
 
 logger = structlog.get_logger(__name__)
 
+# ── Maximum chat content length before summarisation ────────────────
+_MAX_CHAT_CONTENT_LENGTH = 800
+
+
+def _summarise_for_chat(content: str, subtask_label: str = "") -> str:
+    """Produce a concise conclusion summary of agent output for the chat window.
+
+    The full content is preserved in the backend (accumulated_context,
+    step.output) for downstream agents and documentation.  This helper
+    builds a short conclusion-style paragraph (not truncation).
+
+    Handles:
+    - Markdown output (extract conclusion from headings + key metrics)
+    - JSON findings arrays (status/severity counts)
+    - Raw text (first + last meaningful sentences)
+    """
+    if len(content) <= _MAX_CHAT_CONTENT_LENGTH:
+        return content
+
+    # ── Try to summarise JSON findings ───────────────────────────
+    stripped_content = content.strip()
+    if stripped_content.startswith(("[", "{")):
+        json_summary = _summarise_json_findings(content)
+        if json_summary:
+            return json_summary
+
+    # ── Build a conclusion from the content ─────────────────────
+    lines = content.split("\n")
+    headings: list[str] = []
+    key_metrics: list[str] = []
+    conclusion_lines: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Collect headings (strip markdown)
+        if stripped.startswith("#"):
+            headings.append(re.sub(r"^#{1,4}\s*", "", stripped))
+            continue
+        # Skip JSON / code blocks
+        if stripped.startswith(("{", "[", "```", "|")):
+            continue
+        # Extract numeric metrics
+        metric_match = re.search(
+            r"(\d+(?:,\d+)*)\s+(?:total|controls?|findings?|resources?|items?|tables?|pass|fail|issues?)"
+            r"|(?:total|count|score|found|identified|pass|fail)[:\s]+(\d+(?:,\d+)*(?:\.\d+)?%?)",
+            stripped, re.IGNORECASE,
+        )
+        if metric_match and len(stripped) < 120:
+            key_metrics.append(stripped.lstrip("- *"))
+            continue
+        # Collect conclusion-like sentences (summary, result, recommendation)
+        lower = stripped.lower()
+        if any(kw in lower for kw in (
+            "summary", "conclusion", "overall", "result",
+            "completed", "assessed", "identified", "recommend",
+            "in total", "findings", "successfully",
+        )) and len(stripped) < 200:
+            conclusion_lines.append(stripped.lstrip("- *"))
+
+    # Assemble the summary
+    parts: list[str] = []
+    budget = _MAX_CHAT_CONTENT_LENGTH - 40
+    used = 0
+
+    # Title from subtask label or first heading
+    title = subtask_label or (headings[0] if headings else "")
+    if title:
+        parts.append(f"**{title}**")
+        used += len(title) + 4
+
+    # Key metrics (up to 3)
+    for m in key_metrics[:3]:
+        if used + len(m) + 3 < budget:
+            parts.append(f"- {m}")
+            used += len(m) + 3
+
+    # Conclusion sentences (up to 3)
+    for c in conclusion_lines[:3]:
+        if used + len(c) + 1 < budget:
+            parts.append(c)
+            used += len(c) + 1
+
+    # If we got nothing meaningful, take first 2 non-heading text lines
+    if len(parts) <= 1:
+        for line in lines:
+            stripped = line.strip()
+            if (stripped and not stripped.startswith(("#", "{", "[", "```", "|"))
+                    and len(stripped) > 20):
+                text = stripped.lstrip("- *")[:200]
+                parts.append(text)
+                used += len(text)
+                if len(parts) >= 3 or used >= budget:
+                    break
+
+    return "\n".join(parts) if parts else content[:budget]
+
+
+def _summarise_json_findings(content: str) -> str | None:
+    """Summarise JSON security findings into a readable table for chat.
+
+    Also handles non-findings structured JSON commonly returned by
+    security-assessment MCP tools: subscription lists, MCSB control
+    catalogues, resource inventories, resource details, Excel report
+    generation results, and blob upload confirmations.
+    """
+    import json as _j
+    try:
+        data = _j.loads(content.strip())
+    except (_j.JSONDecodeError, ValueError):
+        # Content may contain JSON embedded in text — try to extract it
+        match = re.search(r"(\[[\s\S]*\]|\{[\s\S]*\})", content)
+        if not match:
+            return None
+        try:
+            data = _j.loads(match.group(1))
+        except (_j.JSONDecodeError, ValueError):
+            return None
+
+    # ── Non-findings structured JSON from security MCP tools ─────
+    if isinstance(data, dict):
+        structured = _summarise_structured_json(data)
+        if structured:
+            return structured
+
+    # ── Findings-style JSON (status/severity arrays) ─────────────
+    # Normalise to list
+    findings: list[dict] = []
+    if isinstance(data, dict):
+        for v in data.values():
+            if isinstance(v, list) and v and isinstance(v[0], dict):
+                findings = v
+                break
+        if not findings and "control_id" in data:
+            findings = [data]
+    elif isinstance(data, list):
+        findings = data
+
+    if not findings or not isinstance(findings[0], dict):
+        return None
+
+    # Check this actually looks like findings (has status or severity)
+    sample = findings[0]
+    if not (sample.get("status") or sample.get("severity") or sample.get("control_id")):
+        return None
+
+    # Build summary table
+    total = len(findings)
+    pass_count = sum(1 for f in findings if str(f.get("status", "")).upper() == "PASS")
+    fail_count = sum(1 for f in findings if str(f.get("status", "")).upper() == "FAIL")
+    manual_count = sum(1 for f in findings if "MANUAL" in str(f.get("status", "")).upper())
+    critical = sum(1 for f in findings if str(f.get("severity", "")).lower() == "critical")
+    high = sum(1 for f in findings if str(f.get("severity", "")).lower() == "high")
+
+    parts = [
+        f"**Assessment Summary** — {total} findings\n",
+        f"| Status | Count |",
+        f"|--------|-------|",
+        f"| ✅ PASS | {pass_count} |",
+        f"| ❌ FAIL | {fail_count} |",
+        f"| 🔍 MANUAL REVIEW | {manual_count} |",
+        f"\n| Severity | Count |",
+        f"|----------|-------|",
+    ]
+    if critical:
+        parts.append(f"| 🔴 Critical | {critical} |")
+    if high:
+        parts.append(f"| 🟠 High | {high} |")
+    medium = sum(1 for f in findings if str(f.get("severity", "")).lower() == "medium")
+    if medium:
+        parts.append(f"| 🟡 Medium | {medium} |")
+
+    # Top findings (FAIL only, up to 5)
+    fails = [f for f in findings if str(f.get("status", "")).upper() == "FAIL"][:5]
+    if fails:
+        parts.append("\n**Key Findings:**")
+        for f in fails:
+            ctrl = f.get("control_id", "?")
+            title = f.get("title", f.get("control_name", ""))
+            sev = f.get("severity", "")
+            parts.append(f"- **{ctrl}** ({sev}): {title}")
+
+    return "\n".join(parts)
+
+
+def _summarise_structured_json(data: dict) -> str | None:
+    """Summarise non-findings structured JSON from security MCP tools.
+
+    Recognises output shapes from:
+    - sec_list_subscriptions   → subscription inventory
+    - sec_get_mcsb_controls    → MCSB control catalogue
+    - sec_list_resources       → Azure resource inventory
+    - sec_get_resource_details → single resource detail
+    - sec_generate_excel_report → report generation result
+    - storage_upload_blob      → blob upload confirmation
+    - sec_list_role_assignments → RBAC role assignment list
+    """
+    status = str(data.get("status", "")).lower()
+
+    # ── Subscription list ────────────────────────────────────────
+    subs = data.get("subscriptions")
+    if isinstance(subs, list) and subs and isinstance(subs[0], dict) and "subscription_id" in subs[0]:
+        parts = [f"**Discovered {len(subs)} Azure subscription(s)**\n"]
+        parts.append("| Subscription | State |")
+        parts.append("|---|---|")
+        for s in subs[:10]:
+            name = s.get("display_name", s.get("subscription_id", "?"))
+            state = s.get("state", "")
+            parts.append(f"| {name} | {state} |")
+        if len(subs) > 10:
+            parts.append(f"\n*…and {len(subs) - 10} more*")
+        return "\n".join(parts)
+
+    # ── MCSB control catalogue ───────────────────────────────────
+    controls = data.get("controls")
+    if isinstance(controls, dict) and (data.get("total_controls") or data.get("domains")):
+        total = data.get("total_controls") or data.get("count") or len(controls)
+        domain_filter = data.get("domain", "")
+        domains = data.get("domains", [])
+        if domain_filter:
+            parts = [f"**MCSB v2 Controls — {domain_filter} domain** ({total} controls)\n"]
+        else:
+            parts = [f"**MCSB v2 Control Catalogue** — {total} controls across {len(domains)} domains\n"]
+        if domains:
+            parts.append("Domains: " + ", ".join(str(d) for d in domains[:15]))
+        # Show first few control IDs as sample
+        ctrl_ids = sorted(controls.keys())[:8]
+        if ctrl_ids:
+            parts.append("\n**Sample controls:** " + ", ".join(ctrl_ids))
+            if len(controls) > 8:
+                parts.append(f"*…and {len(controls) - 8} more*")
+        return "\n".join(parts)
+
+    # ── Resource list ────────────────────────────────────────────
+    resources = data.get("resources")
+    if isinstance(resources, list) and data.get("count") is not None and "resources" in data:
+        count = data.get("count", len(resources))
+        parts = [f"**Found {count} Azure resource(s)**\n"]
+        # Group by type for a compact summary
+        type_counts: dict[str, int] = {}
+        for r in resources:
+            rtype = str(r.get("type", "Unknown"))
+            # Shorten: Microsoft.Network/virtualNetworks → virtualNetworks
+            short = rtype.rsplit("/", 1)[-1] if "/" in rtype else rtype
+            type_counts[short] = type_counts.get(short, 0) + 1
+        if type_counts:
+            parts.append("| Resource Type | Count |")
+            parts.append("|---|---|")
+            for rtype, cnt in sorted(type_counts.items(), key=lambda x: -x[1])[:10]:
+                parts.append(f"| {rtype} | {cnt} |")
+        # Show a few resource names
+        names = [r.get("name", "") for r in resources[:5] if r.get("name")]
+        if names:
+            parts.append("\n**Examples:** " + ", ".join(names))
+            if count > 5:
+                parts.append(f"*…and {count - 5} more*")
+        return "\n".join(parts)
+
+    # ── Single resource detail ───────────────────────────────────
+    if data.get("properties") and data.get("type") and data.get("name"):
+        name = data.get("name", "")
+        rtype = str(data.get("type", ""))
+        short_type = rtype.rsplit("/", 1)[-1] if "/" in rtype else rtype
+        location = data.get("location", "")
+        parts = [f"**{short_type}: {name}**"]
+        if location:
+            parts.append(f"- Location: {location}")
+        props = data.get("properties", {})
+        if isinstance(props, dict):
+            # Surface key properties (up to 6)
+            shown = 0
+            for pk, pv in props.items():
+                if shown >= 6:
+                    break
+                if isinstance(pv, (str, int, float, bool)):
+                    parts.append(f"- {pk}: {pv}")
+                    shown += 1
+                elif isinstance(pv, dict) and "provisioningState" in str(pv):
+                    parts.append(f"- provisioningState: {pv.get('provisioningState', '')}")
+                    shown += 1
+            remaining = len(props) - shown
+            if remaining > 0:
+                parts.append(f"*…{remaining} more properties*")
+        return "\n".join(parts)
+
+    # ── Excel report generation ──────────────────────────────────
+    if data.get("excel_base64") or data.get("filename"):
+        filename = data.get("filename", "report.xlsx")
+        size = data.get("size_bytes", 0)
+        summary = data.get("summary", {})
+        parts = [f"**Report Generated:** {filename}"]
+        if size:
+            parts.append(f"- Size: {size:,} bytes")
+        if summary:
+            total = summary.get("total_findings", 0)
+            passed = summary.get("passed", 0)
+            failed = summary.get("failed", 0)
+            manual = summary.get("manual_review", 0)
+            pct = summary.get("compliance_percentage", 0)
+            parts.append(f"- Findings: {total} total — ✅ {passed} pass, ❌ {failed} fail, 🔍 {manual} manual")
+            parts.append(f"- Compliance: {pct:.1f}%")
+        return "\n".join(parts)
+
+    # ── Blob upload confirmation ─────────────────────────────────
+    if status == "uploaded" and data.get("container") and data.get("blob"):
+        container = data.get("container", "")
+        blob = data.get("blob", "")
+        return f"**Uploaded:** `{container}/{blob}`"
+
+    # ── Role assignments ─────────────────────────────────────────
+    assignments = data.get("role_assignments")
+    if isinstance(assignments, list) and "role_assignments" in data:
+        count = data.get("count", len(assignments))
+        parts = [f"**Found {count} RBAC role assignment(s)**\n"]
+        # Group by role
+        role_counts: dict[str, int] = {}
+        for a in assignments:
+            role = str(a.get("role_name", a.get("role_definition_name", "Unknown")))
+            role_counts[role] = role_counts.get(role, 0) + 1
+        if role_counts:
+            parts.append("| Role | Count |")
+            parts.append("|---|---|")
+            for role, cnt in sorted(role_counts.items(), key=lambda x: -x[1])[:8]:
+                parts.append(f"| {role} | {cnt} |")
+        return "\n".join(parts)
+
+    # ── Generic success/error with a message ─────────────────────
+    if status in ("success", "error") and data.get("error"):
+        return f"**Error:** {data['error']}"
+
+    return None
+
+
 # Callback to send WebSocket messages
 SendWSCallback = Callable[
     [str, WebSocketMessage],  # user_id, message
@@ -743,6 +1077,12 @@ Return a JSON object with a "task" field and a "steps" array."""
 
     # ── Sub-task Generation ──────────────────────────────────────────
 
+    # Agents whose job is purely to compile/report from prior outputs.
+    # They should NOT get data-gathering subtasks.
+    _REPORTING_AGENTS = {
+        "reportingagent", "securityreportingagent",
+    }
+
     async def _generate_subtasks(
         self,
         agent_name: str,
@@ -753,8 +1093,17 @@ Return a JSON object with a "task" field and a "steps" array."""
 
         Returns a list of dicts: [{"id": "1", "label": "..."}]
         Uses a quick LLM call. Falls back to a single generic sub-task.
+        For reporting/compilation agents, returns fixed subtasks.
         """
         import json as _json
+
+        # ── Fixed subtasks for reporting agents ────────────────────
+        if agent_name.lower().replace(" ", "") in self._REPORTING_AGENTS:
+            return [
+                {"id": "1", "label": "Compile findings from previous agents"},
+                {"id": "2", "label": "Generate assessment report"},
+                {"id": "3", "label": "Upload report to storage"},
+            ]
 
         tools_hint = ", ".join(tool_names[:15]) if tool_names else "general tools"
 
@@ -766,6 +1115,11 @@ Return a JSON object with a "task" field and a "steps" array."""
                         "content": (
                             "You break down an agent's task into 3-6 concise sub-tasks. "
                             "Each sub-task should be a short action phrase (max 10 words). "
+                            "CRITICAL: The sub-tasks MUST only use the agent's available tools. "
+                            "Do NOT create sub-tasks for data gathering or fetching if the "
+                            "agent only has report-generation or upload tools. "
+                            "Do NOT add redundant 'generate report' or 'summarize' sub-tasks "
+                            "unless that is the agent's primary purpose. "
                             "Return ONLY a JSON array of strings. No markdown, no explanation."
                         ),
                     },
@@ -774,8 +1128,8 @@ Return a JSON object with a "task" field and a "steps" array."""
                         "content": (
                             f"Agent: {agent_name}\n"
                             f"Task: {task}\n"
-                            f"Available tools: {tools_hint}\n\n"
-                            "Break this into 3-6 ordered sub-tasks:"
+                            f"Available tools (agent can ONLY use these): {tools_hint}\n\n"
+                            "Break this into 3-6 ordered sub-tasks that use the available tools:"
                         ),
                     },
                 ],
@@ -826,13 +1180,17 @@ Return a JSON object with a "task" field and a "steps" array."""
                     break
 
                 # Check dependencies are complete
+                # Allow SKIPPED (user-rejected) deps — downstream steps
+                # can still run with outputs from other completed deps.
+                # Only FAILED and IN_PROGRESS/PENDING block execution.
+                _PASSABLE = {StepStatus.COMPLETED, StepStatus.SKIPPED}
                 deps_met = True
                 for dep in step.dependencies:
                     dep_step = next(
                         (s for s in plan.m_plan.steps if s.step_number == dep),
                         None,
                     )
-                    if dep_step and dep_step.status != StepStatus.COMPLETED:
+                    if dep_step and dep_step.status not in _PASSABLE:
                         step.status = StepStatus.SKIPPED
                         deps_met = False
                         break
@@ -1091,6 +1449,10 @@ Return a JSON object with a "task" field and a "steps" array."""
 
                     subtask_task = "\n".join(subtask_prompt_parts)
 
+                    # Doc generation only at the very last subtask of the very last step
+                    is_last_step = (step.step_number == plan.m_plan.steps[-1].step_number)
+                    is_last_subtask = (st_idx >= len(subtasks) - 1)
+
                     context = AgentRunContext(
                         plan_id=plan.plan_id,
                         step_id=step.id,
@@ -1098,6 +1460,7 @@ Return a JSON object with a "task" field and a "steps" array."""
                         task=subtask_task,
                         previous_outputs=prev_outputs,
                         subtask_label=st["label"],
+                        is_final_step=is_last_step and is_last_subtask,
                     )
 
                     # Progress callback scoped to this sub-task
@@ -1167,7 +1530,10 @@ Return a JSON object with a "task" field and a "steps" array."""
                             },
                         )
 
-                        # Send the sub-task result to chat
+                        # Send a concise summary to chat; full detail stays in backend
+                        chat_summary = _summarise_for_chat(
+                            result.content, st["label"],
+                        )
                         await self._notify_ws(
                             plan.user_id,
                             WebSocketMessageType.AGENT_RESPONSE,
@@ -1175,7 +1541,7 @@ Return a JSON object with a "task" field and a "steps" array."""
                                 "agent": step.agent,
                                 "content": (
                                     f"**Sub-task {st_idx + 1}/{len(subtasks)}: "
-                                    f"{st['label']}**\n\n{result.content}"
+                                    f"{st['label']}**\n\n{chat_summary}"
                                 ),
                                 "step_number": step.step_number,
                                 "subtask_id": st["id"],
@@ -1241,10 +1607,12 @@ Return a JSON object with a "task" field and a "steps" array."""
                             "next_subtask": next_label,
                             "is_last_subtask": is_last,
                             "result_preview": (
-                                result.content[:500]
+                                _summarise_for_chat(
+                                    result.content, st["label"],
+                                )
                                 if result.success else
                                 result.error or ""
-                            )[:500],
+                            ),
                         },
                     )
 
@@ -1392,6 +1760,9 @@ Return a JSON object with a "task" field and a "steps" array."""
                             )
                             result = rerun_result
                             # Update chat with actual result
+                            rerun_chat_summary = _summarise_for_chat(
+                                rerun_result.content, st["label"],
+                            )
                             await self._notify_ws(
                                 plan.user_id,
                                 WebSocketMessageType.AGENT_RESPONSE,
@@ -1402,7 +1773,7 @@ Return a JSON object with a "task" field and a "steps" array."""
                                         f"{len(subtasks)}: "
                                         f"{st['label']}** (re-run with "
                                         f"your input)\n\n"
-                                        f"{rerun_result.content}"
+                                        f"{rerun_chat_summary}"
                                     ),
                                     "step_number": step.step_number,
                                     "subtask_id": st["id"],
@@ -1466,7 +1837,7 @@ Return a JSON object with a "task" field and a "steps" array."""
                         "status": step.status.value,
                         "total_steps": total_steps,
                         "duration": duration_str,
-                        "output": (combined_output[:500] if combined_output else ""),
+                        "output": "",
                         "error": step.error or "",
                         "message": (
                             f"{step.agent} completed in {duration_str}"

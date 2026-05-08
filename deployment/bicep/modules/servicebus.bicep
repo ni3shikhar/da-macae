@@ -63,13 +63,15 @@ resource deadLetterQueue 'Microsoft.ServiceBus/namespaces/queues@2022-10-01-prev
   properties: {
     lockDuration: 'PT5M'
     maxSizeInMegabytes: environment == 'prod' ? 5120 : 1024
-    requiresDuplicateDetection: true
-    duplicateDetectionHistoryTimeWindow: 'PT10M'
+    // Duplicate detection requires Standard/Premium tier — disabled on Basic (dev)
+    requiresDuplicateDetection: environment != 'dev'
+    duplicateDetectionHistoryTimeWindow: environment != 'dev' ? 'PT10M' : null
     deadLetteringOnMessageExpiration: true
     defaultMessageTimeToLive: 'P14D'
     maxDeliveryCount: 10
     enableBatchedOperations: true
-    autoDeleteOnIdle: 'P365D'
+    // Basic tier (dev) does not support autoDeleteOnIdle — omit it by setting null
+    autoDeleteOnIdle: environment == 'dev' ? null : 'P365D'
   }
 }
 

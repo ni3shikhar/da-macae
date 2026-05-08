@@ -1,0 +1,785 @@
+{
+  "version": "2.0",
+  "framework": "Microsoft Cloud Security Benchmark v2",
+  "domains": [
+    {"id": "NS", "name": "Network Security", "control_count": 10},
+    {"id": "IM", "name": "Identity Management", "control_count": 8},
+    {"id": "DP", "name": "Data Protection", "control_count": 8},
+    {"id": "PA", "name": "Privileged Access", "control_count": 8},
+    {"id": "AM", "name": "Asset Management", "control_count": 5},
+    {"id": "LT", "name": "Logging and Threat Detection", "control_count": 7},
+    {"id": "IR", "name": "Incident Response", "control_count": 7},
+    {"id": "PV", "name": "Posture and Vulnerability Management", "control_count": 7},
+    {"id": "ES", "name": "Endpoint Security", "control_count": 3},
+    {"id": "BR", "name": "Backup and Recovery", "control_count": 4},
+    {"id": "DS", "name": "DevOps Security", "control_count": 7},
+    {"id": "GS", "name": "Governance and Strategy", "control_count": 11}
+  ],
+  "controls": {
+    "NS-1": {
+      "id": "NS-1",
+      "domain": "NS",
+      "title": "Establish network segmentation boundaries",
+      "description": "Ensure that your virtual network deployment aligns to your enterprise segmentation strategy. Any workload that could incur higher risk for the organization should be isolated in its own virtual network.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "4.1", "NIST SP 800-53": "SC-7", "PCI DSS": "1.1"}
+    },
+    "NS-2": {
+      "id": "NS-2",
+      "domain": "NS",
+      "title": "Secure cloud native services with network controls",
+      "description": "Use private endpoints for Azure PaaS services to avoid data exposure via public endpoints. Disable public network access where possible.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "4.2", "NIST SP 800-53": "SC-7", "PCI DSS": "1.3"}
+    },
+    "NS-3": {
+      "id": "NS-3",
+      "domain": "NS",
+      "title": "Deploy firewall at the edge of enterprise network",
+      "description": "Deploy Azure Firewall or a compatible network virtual appliance (NVA) to filter traffic at the network perimeter.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "4.3", "NIST SP 800-53": "SC-7", "PCI DSS": "1.2"}
+    },
+    "NS-4": {
+      "id": "NS-4",
+      "domain": "NS",
+      "title": "Deploy intrusion detection/intrusion prevention systems (IDS/IPS)",
+      "description": "Use Azure Firewall Premium or third-party IDS/IPS with DDoS protection and WAF to inspect and filter network traffic.",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "4.4", "NIST SP 800-53": "SC-7, SI-4", "PCI DSS": "6.6"}
+    },
+    "NS-5": {
+      "id": "NS-5",
+      "domain": "NS",
+      "title": "Deploy DDOS protection",
+      "description": "Deploy Azure DDoS Protection on virtual networks hosting critical workloads.",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "4.5", "NIST SP 800-53": "SC-5", "PCI DSS": "6.6"}
+    },
+    "NS-6": {
+      "id": "NS-6",
+      "domain": "NS",
+      "title": "Deploy web application firewall",
+      "description": "Deploy Azure WAF in front of web-facing applications and configure appropriate rules or virtual patches.",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "4.6", "NIST SP 800-53": "SC-7", "PCI DSS": "6.6"}
+    },
+    "NS-7": {
+      "id": "NS-7",
+      "domain": "NS",
+      "title": "Simplify network security configuration",
+      "description": "Use Application Security Groups (ASGs) and Azure Firewall Manager to simplify and centrally manage NSG rules and firewall policies.",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "4.7", "NIST SP 800-53": "SC-7", "PCI DSS": "1.1"}
+    },
+    "NS-8": {
+      "id": "NS-8",
+      "domain": "NS",
+      "title": "Detect and disable insecure services and protocols",
+      "description": "Detect and disable insecure services and protocols such as SSL/TLS v1.0/1.1, SSHv1, SMBv1, and other legacy protocols.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "4.8", "NIST SP 800-53": "SC-8", "PCI DSS": "4.1"}
+    },
+    "NS-9": {
+      "id": "NS-9",
+      "domain": "NS",
+      "title": "Connect on-premises or cloud network privately",
+      "description": "Use Azure ExpressRoute or VPN with proper encryption to securely connect on-premises networks to Azure.",
+      "severity": "High",
+      "automated": false,
+      "mappings": {"CIS": "4.9", "NIST SP 800-53": "SC-8, SC-12", "PCI DSS": "4.1"}
+    },
+    "NS-10": {
+      "id": "NS-10",
+      "domain": "NS",
+      "title": "Ensure Domain Name System (DNS) security",
+      "description": "Use Azure DNS or Azure Private DNS and configure DNS security settings including DNSSEC.",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "4.10", "NIST SP 800-53": "SC-20, SC-21", "PCI DSS": ""}
+    },
+    "IM-1": {
+      "id": "IM-1",
+      "domain": "IM",
+      "title": "Use centralized identity and authentication system",
+      "description": "Use Microsoft Entra ID as the centralized identity and authentication management system for all cloud resources.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "5.1", "NIST SP 800-53": "AC-2, IA-2", "PCI DSS": "7.1"}
+    },
+    "IM-2": {
+      "id": "IM-2",
+      "domain": "IM",
+      "title": "Protect identity and authentication system",
+      "description": "Secure your identity and authentication system by enabling security defaults, Conditional Access policies, and monitoring sign-in risks.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "5.2", "NIST SP 800-53": "AC-2, IA-5", "PCI DSS": "8.1"}
+    },
+    "IM-3": {
+      "id": "IM-3",
+      "domain": "IM",
+      "title": "Manage application identities securely",
+      "description": "Use managed identities instead of service principals with credentials. Avoid embedding credentials in code or configuration.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "5.3", "NIST SP 800-53": "IA-4, IA-9", "PCI DSS": "8.5"}
+    },
+    "IM-4": {
+      "id": "IM-4",
+      "domain": "IM",
+      "title": "Authenticate server and services",
+      "description": "Use managed identities to authenticate Azure services instead of stored credentials.",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "5.4", "NIST SP 800-53": "IA-9", "PCI DSS": "8.5"}
+    },
+    "IM-5": {
+      "id": "IM-5",
+      "domain": "IM",
+      "title": "Use single sign-on (SSO) for application access",
+      "description": "Use Entra ID SSO for application access to simplify identity management and improve user experience.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "5.5", "NIST SP 800-53": "IA-2", "PCI DSS": "8.1"}
+    },
+    "IM-6": {
+      "id": "IM-6",
+      "domain": "IM",
+      "title": "Use strong authentication controls",
+      "description": "Enforce MFA for all users including administrators. Use passwordless authentication methods where possible.",
+      "severity": "Critical",
+      "automated": true,
+      "mappings": {"CIS": "5.6", "NIST SP 800-53": "IA-2, IA-5", "PCI DSS": "8.3"}
+    },
+    "IM-7": {
+      "id": "IM-7",
+      "domain": "IM",
+      "title": "Restrict resource access based on conditions",
+      "description": "Use Conditional Access policies to enforce access controls based on conditions such as device compliance, location, and risk level.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "5.7", "NIST SP 800-53": "AC-3, AC-6", "PCI DSS": "7.1"}
+    },
+    "IM-8": {
+      "id": "IM-8",
+      "domain": "IM",
+      "title": "Restrict exposure of credentials and secrets",
+      "description": "Store credentials and secrets in Azure Key Vault. Never embed them in code, configuration, or deployment scripts.",
+      "severity": "Critical",
+      "automated": true,
+      "mappings": {"CIS": "5.8", "NIST SP 800-53": "IA-5", "PCI DSS": "6.5"}
+    },
+    "DP-1": {
+      "id": "DP-1",
+      "domain": "DP",
+      "title": "Discover, classify, and label sensitive data",
+      "description": "Use Microsoft Purview or equivalent to discover, classify, and label sensitive data across your Azure environment.",
+      "severity": "High",
+      "automated": false,
+      "mappings": {"CIS": "3.1", "NIST SP 800-53": "SC-28, RA-2", "PCI DSS": "3.4"}
+    },
+    "DP-2": {
+      "id": "DP-2",
+      "domain": "DP",
+      "title": "Monitor anomalies and threats targeting sensitive data",
+      "description": "Enable advanced threat protection on data stores to monitor for anomalies and threats targeting sensitive data.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "3.2", "NIST SP 800-53": "SI-4", "PCI DSS": "10.6"}
+    },
+    "DP-3": {
+      "id": "DP-3",
+      "domain": "DP",
+      "title": "Encrypt sensitive data in transit",
+      "description": "Enforce TLS 1.2 or higher for all data in transit. Disable older TLS/SSL versions.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "3.3", "NIST SP 800-53": "SC-8", "PCI DSS": "4.1"}
+    },
+    "DP-4": {
+      "id": "DP-4",
+      "domain": "DP",
+      "title": "Enable data at rest encryption by default",
+      "description": "Ensure all data stores use platform encryption at rest by default (SSE with Microsoft-managed keys).",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "3.4", "NIST SP 800-53": "SC-28", "PCI DSS": "3.4"}
+    },
+    "DP-5": {
+      "id": "DP-5",
+      "domain": "DP",
+      "title": "Use customer-managed key option in data at rest encryption when required",
+      "description": "Where required by compliance, use customer-managed keys (CMK) with Azure Key Vault for data at rest encryption.",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "3.5", "NIST SP 800-53": "SC-12, SC-28", "PCI DSS": "3.5"}
+    },
+    "DP-6": {
+      "id": "DP-6",
+      "domain": "DP",
+      "title": "Use a secure key management process",
+      "description": "Define and implement a key management process including key generation, distribution, storage, rotation, revocation, and access control.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "3.6", "NIST SP 800-53": "SC-12", "PCI DSS": "3.6"}
+    },
+    "DP-7": {
+      "id": "DP-7",
+      "domain": "DP",
+      "title": "Use a secure certificate management process",
+      "description": "Manage TLS/SSL certificates through Azure Key Vault with auto-renewal and proper access controls.",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "3.7", "NIST SP 800-53": "SC-17", "PCI DSS": "4.1"}
+    },
+    "DP-8": {
+      "id": "DP-8",
+      "domain": "DP",
+      "title": "Ensure security of key and certificate repository",
+      "description": "Secure Key Vault with soft-delete, purge protection, RBAC, network restrictions, and logging.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "3.8", "NIST SP 800-53": "SC-12, SC-17", "PCI DSS": "3.6"}
+    },
+    "PA-1": {
+      "id": "PA-1",
+      "domain": "PA",
+      "title": "Separate and limit highly privileged/administrative users",
+      "description": "Limit the number of highly privileged accounts (Owner, Contributor at subscription level). Use dedicated admin accounts.",
+      "severity": "Critical",
+      "automated": true,
+      "mappings": {"CIS": "1.1", "NIST SP 800-53": "AC-2, AC-6", "PCI DSS": "7.1"}
+    },
+    "PA-2": {
+      "id": "PA-2",
+      "domain": "PA",
+      "title": "Avoid standing access for user accounts and permissions",
+      "description": "Use Privileged Identity Management (PIM) for just-in-time (JIT) access to privileged roles instead of permanent assignments.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "1.2", "NIST SP 800-53": "AC-2", "PCI DSS": "7.1"}
+    },
+    "PA-3": {
+      "id": "PA-3",
+      "domain": "PA",
+      "title": "Manage lifecycle of identities and entitlements",
+      "description": "Implement identity lifecycle management processes including access reviews and entitlement management.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "1.3", "NIST SP 800-53": "AC-2", "PCI DSS": "7.1"}
+    },
+    "PA-4": {
+      "id": "PA-4",
+      "domain": "PA",
+      "title": "Review and reconcile user access regularly",
+      "description": "Conduct regular access reviews for privileged roles and ensure alignment with business needs.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "1.4", "NIST SP 800-53": "AC-2", "PCI DSS": "7.1"}
+    },
+    "PA-5": {
+      "id": "PA-5",
+      "domain": "PA",
+      "title": "Set up emergency access",
+      "description": "Create and secure break-glass emergency access accounts to prevent lockout from the Entra ID tenant.",
+      "severity": "High",
+      "automated": false,
+      "mappings": {"CIS": "1.5", "NIST SP 800-53": "AC-2", "PCI DSS": ""}
+    },
+    "PA-6": {
+      "id": "PA-6",
+      "domain": "PA",
+      "title": "Use privileged access workstations",
+      "description": "Use Privileged Access Workstations (PAW) for administrative tasks to reduce the risk of credential theft.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "1.6", "NIST SP 800-53": "AC-2, SC-2", "PCI DSS": ""}
+    },
+    "PA-7": {
+      "id": "PA-7",
+      "domain": "PA",
+      "title": "Follow just enough administration (least privilege) principle",
+      "description": "Use Azure RBAC to assign the minimum required permissions. Prefer built-in roles over custom roles.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "1.7", "NIST SP 800-53": "AC-6", "PCI DSS": "7.1"}
+    },
+    "PA-8": {
+      "id": "PA-8",
+      "domain": "PA",
+      "title": "Determine access process for cloud provider support",
+      "description": "Establish a clear process for granting and revoking cloud provider support access. Use Customer Lockbox.",
+      "severity": "Low",
+      "automated": false,
+      "mappings": {"CIS": "1.8", "NIST SP 800-53": "AC-2", "PCI DSS": ""}
+    },
+    "AM-1": {
+      "id": "AM-1",
+      "domain": "AM",
+      "title": "Track asset inventory and their risks",
+      "description": "Maintain a comprehensive inventory of all cloud assets using Azure Resource Graph and track their risk levels.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "2.1", "NIST SP 800-53": "CM-8", "PCI DSS": "2.4"}
+    },
+    "AM-2": {
+      "id": "AM-2",
+      "domain": "AM",
+      "title": "Use only approved services",
+      "description": "Use Azure Policy to restrict which Azure services can be provisioned. Define and enforce allowed service lists.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "2.2", "NIST SP 800-53": "CM-7", "PCI DSS": "2.2"}
+    },
+    "AM-3": {
+      "id": "AM-3",
+      "domain": "AM",
+      "title": "Ensure security of asset lifecycle management",
+      "description": "Implement secure asset lifecycle management processes including provisioning, configuration, monitoring, and decommissioning.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "2.3", "NIST SP 800-53": "CM-8", "PCI DSS": "2.4"}
+    },
+    "AM-4": {
+      "id": "AM-4",
+      "domain": "AM",
+      "title": "Limit access to asset management",
+      "description": "Restrict who can modify resource configurations using RBAC. Use resource locks for critical resources.",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "2.4", "NIST SP 800-53": "AC-3, AC-6", "PCI DSS": "7.1"}
+    },
+    "AM-5": {
+      "id": "AM-5",
+      "domain": "AM",
+      "title": "Use only approved applications in virtual machine",
+      "description": "Use adaptive application controls to ensure only approved applications run on virtual machines.",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "2.5", "NIST SP 800-53": "CM-7", "PCI DSS": "2.2"}
+    },
+    "LT-1": {
+      "id": "LT-1",
+      "domain": "LT",
+      "title": "Enable threat detection capabilities",
+      "description": "Enable Microsoft Defender for Cloud plans for all supported resource types to detect threats and anomalies.",
+      "severity": "Critical",
+      "automated": true,
+      "mappings": {"CIS": "7.1", "NIST SP 800-53": "SI-4", "PCI DSS": "10.6"}
+    },
+    "LT-2": {
+      "id": "LT-2",
+      "domain": "LT",
+      "title": "Enable threat detection for identity and access management",
+      "description": "Enable Entra ID Protection and identity-based threat detection to identify suspicious sign-in and identity-related risks.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "7.2", "NIST SP 800-53": "SI-4, AC-7", "PCI DSS": "10.6"}
+    },
+    "LT-3": {
+      "id": "LT-3",
+      "domain": "LT",
+      "title": "Enable logging for security investigation",
+      "description": "Enable diagnostic settings on all Azure resources to capture control plane and data plane logs.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "7.3", "NIST SP 800-53": "AU-3, AU-6, AU-12", "PCI DSS": "10.1"}
+    },
+    "LT-4": {
+      "id": "LT-4",
+      "domain": "LT",
+      "title": "Enable network logging for security investigation",
+      "description": "Enable NSG flow logs and Traffic Analytics for network security investigation and monitoring.",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "7.4", "NIST SP 800-53": "AU-3, AU-12", "PCI DSS": "10.1"}
+    },
+    "LT-5": {
+      "id": "LT-5",
+      "domain": "LT",
+      "title": "Centralize security log management and analysis",
+      "description": "Centralize log collection in a Log Analytics workspace for correlation, analysis, and alerting.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "7.5", "NIST SP 800-53": "AU-6", "PCI DSS": "10.5"}
+    },
+    "LT-6": {
+      "id": "LT-6",
+      "domain": "LT",
+      "title": "Configure log storage retention",
+      "description": "Configure appropriate log retention periods (minimum 90 days for security logs, longer for compliance).",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "7.6", "NIST SP 800-53": "AU-11", "PCI DSS": "10.7"}
+    },
+    "LT-7": {
+      "id": "LT-7",
+      "domain": "LT",
+      "title": "Use approved time synchronization sources",
+      "description": "Use trusted NTP time sources for all systems to ensure accurate and synchronized log timestamps.",
+      "severity": "Low",
+      "automated": false,
+      "mappings": {"CIS": "7.7", "NIST SP 800-53": "AU-8", "PCI DSS": "10.4"}
+    },
+    "IR-1": {
+      "id": "IR-1",
+      "domain": "IR",
+      "title": "Preparation - update incident response plan and handling process",
+      "description": "Develop and maintain an incident response plan that covers the full lifecycle of incidents.",
+      "severity": "High",
+      "automated": false,
+      "mappings": {"CIS": "8.1", "NIST SP 800-53": "IR-1, IR-4, IR-8", "PCI DSS": "12.10"}
+    },
+    "IR-2": {
+      "id": "IR-2",
+      "domain": "IR",
+      "title": "Preparation - setup incident notification",
+      "description": "Configure security contacts and alert notifications in Microsoft Defender for Cloud.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "8.2", "NIST SP 800-53": "IR-6", "PCI DSS": "12.10"}
+    },
+    "IR-3": {
+      "id": "IR-3",
+      "domain": "IR",
+      "title": "Detection and analysis - create incidents based on high quality alerts",
+      "description": "Create incident management processes that leverage high-quality alerts from Defender for Cloud and Sentinel.",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "8.3", "NIST SP 800-53": "IR-4, IR-5", "PCI DSS": "12.10"}
+    },
+    "IR-4": {
+      "id": "IR-4",
+      "domain": "IR",
+      "title": "Detection and analysis - investigate an incident",
+      "description": "Establish investigation procedures and use Microsoft Sentinel for incident investigation and threat hunting.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "8.4", "NIST SP 800-53": "IR-4", "PCI DSS": "12.10"}
+    },
+    "IR-5": {
+      "id": "IR-5",
+      "domain": "IR",
+      "title": "Detection and analysis - prioritize incidents",
+      "description": "Prioritize incidents based on alert severity and asset sensitivity using automated enrichment and correlation.",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "8.5", "NIST SP 800-53": "IR-4", "PCI DSS": "12.10"}
+    },
+    "IR-6": {
+      "id": "IR-6",
+      "domain": "IR",
+      "title": "Containment, eradication and recovery",
+      "description": "Implement containment procedures including isolation, eradication of threats, and recovery to a known good state.",
+      "severity": "High",
+      "automated": false,
+      "mappings": {"CIS": "8.6", "NIST SP 800-53": "IR-4, IR-5", "PCI DSS": "12.10"}
+    },
+    "IR-7": {
+      "id": "IR-7",
+      "domain": "IR",
+      "title": "Post-incident activity",
+      "description": "Conduct post-incident reviews, update incident response procedures, and retain evidence as required.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "8.7", "NIST SP 800-53": "IR-4, IR-8", "PCI DSS": "12.10"}
+    },
+    "PV-1": {
+      "id": "PV-1",
+      "domain": "PV",
+      "title": "Define and establish secure configurations",
+      "description": "Define security configuration baselines using Azure Policy and MCSB recommendations.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "6.1", "NIST SP 800-53": "CM-2, CM-6", "PCI DSS": "2.2"}
+    },
+    "PV-2": {
+      "id": "PV-2",
+      "domain": "PV",
+      "title": "Audit and enforce secure configurations",
+      "description": "Monitor compliance using Azure Policy and remediate non-compliant resources automatically or manually.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "6.2", "NIST SP 800-53": "CM-2, CM-6", "PCI DSS": "2.2"}
+    },
+    "PV-3": {
+      "id": "PV-3",
+      "domain": "PV",
+      "title": "Define and establish secure configurations for compute resources",
+      "description": "Define secure baselines for VMs and containers using Azure Policy guest configuration and Defender recommendations.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "6.3", "NIST SP 800-53": "CM-2, CM-6", "PCI DSS": "2.2"}
+    },
+    "PV-4": {
+      "id": "PV-4",
+      "domain": "PV",
+      "title": "Audit and enforce secure configurations for compute resources",
+      "description": "Monitor VM and container security configurations and remediate deviations from baselines.",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "6.4", "NIST SP 800-53": "CM-2, CM-6", "PCI DSS": "2.2"}
+    },
+    "PV-5": {
+      "id": "PV-5",
+      "domain": "PV",
+      "title": "Perform vulnerability assessments",
+      "description": "Enable and run vulnerability assessments using Microsoft Defender Vulnerability Management on servers, containers, and databases.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "6.5", "NIST SP 800-53": "RA-5", "PCI DSS": "11.2"}
+    },
+    "PV-6": {
+      "id": "PV-6",
+      "domain": "PV",
+      "title": "Rapidly and automatically remediate vulnerabilities",
+      "description": "Establish SLAs for vulnerability remediation and use automation to patch and remediate rapidly.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "6.6", "NIST SP 800-53": "RA-5, SI-2", "PCI DSS": "6.2"}
+    },
+    "PV-7": {
+      "id": "PV-7",
+      "domain": "PV",
+      "title": "Conduct regular red team operations",
+      "description": "Conduct regular penetration testing and red team exercises to identify vulnerabilities and gaps.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "6.7", "NIST SP 800-53": "CA-8", "PCI DSS": "11.3"}
+    },
+    "ES-1": {
+      "id": "ES-1",
+      "domain": "ES",
+      "title": "Use Endpoint Detection and Response (EDR)",
+      "description": "Enable Microsoft Defender for Endpoint (MDE) on all servers and VMs for endpoint detection and response.",
+      "severity": "Critical",
+      "automated": true,
+      "mappings": {"CIS": "9.1", "NIST SP 800-53": "SI-3, SI-4", "PCI DSS": "5.1"}
+    },
+    "ES-2": {
+      "id": "ES-2",
+      "domain": "ES",
+      "title": "Use modern anti-malware software",
+      "description": "Deploy Microsoft Antimalware or an equivalent anti-malware solution on all VMs and VMSS.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "9.2", "NIST SP 800-53": "SI-3", "PCI DSS": "5.1"}
+    },
+    "ES-3": {
+      "id": "ES-3",
+      "domain": "ES",
+      "title": "Ensure anti-malware software and signatures are updated",
+      "description": "Ensure anti-malware signatures and engine are updated automatically and regularly.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "9.3", "NIST SP 800-53": "SI-3", "PCI DSS": "5.2"}
+    },
+    "BR-1": {
+      "id": "BR-1",
+      "domain": "BR",
+      "title": "Ensure regular automated backups",
+      "description": "Enable Azure Backup for VMs, databases, and critical workloads with appropriate backup policies.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "10.1", "NIST SP 800-53": "CP-9", "PCI DSS": ""}
+    },
+    "BR-2": {
+      "id": "BR-2",
+      "domain": "BR",
+      "title": "Protect backup and recovery data",
+      "description": "Enable soft-delete, immutability, and encryption on backup vaults to protect against accidental or malicious deletion.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "10.2", "NIST SP 800-53": "CP-9", "PCI DSS": ""}
+    },
+    "BR-3": {
+      "id": "BR-3",
+      "domain": "BR",
+      "title": "Monitor backups",
+      "description": "Configure backup monitoring alerts and regularly review backup job status and compliance.",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "10.3", "NIST SP 800-53": "CP-9", "PCI DSS": ""}
+    },
+    "BR-4": {
+      "id": "BR-4",
+      "domain": "BR",
+      "title": "Regularly test backup",
+      "description": "Conduct regular backup restore tests to validate recoverability and ensure RTO/RPO objectives are met.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "10.4", "NIST SP 800-53": "CP-4", "PCI DSS": ""}
+    },
+    "DS-1": {
+      "id": "DS-1",
+      "domain": "DS",
+      "title": "Conduct threat modeling",
+      "description": "Perform threat modeling for applications and infrastructure to identify risks and design mitigations.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "11.1", "NIST SP 800-53": "SA-15", "PCI DSS": "6.5"}
+    },
+    "DS-2": {
+      "id": "DS-2",
+      "domain": "DS",
+      "title": "Ensure software supply chain security",
+      "description": "Implement supply chain security practices including dependency scanning, SBOM generation, and artifact signing.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "11.2", "NIST SP 800-53": "SA-12", "PCI DSS": "6.3"}
+    },
+    "DS-3": {
+      "id": "DS-3",
+      "domain": "DS",
+      "title": "Secure DevOps infrastructure",
+      "description": "Secure CI/CD pipeline infrastructure including source control, build systems, and deployment tools.",
+      "severity": "High",
+      "automated": false,
+      "mappings": {"CIS": "11.3", "NIST SP 800-53": "SA-15", "PCI DSS": "6.3"}
+    },
+    "DS-4": {
+      "id": "DS-4",
+      "domain": "DS",
+      "title": "Integrate static application security testing into DevOps pipeline",
+      "description": "Integrate SAST tools in CI/CD pipelines to detect vulnerabilities in source code before deployment.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "11.4", "NIST SP 800-53": "SA-11", "PCI DSS": "6.6"}
+    },
+    "DS-5": {
+      "id": "DS-5",
+      "domain": "DS",
+      "title": "Integrate dynamic application security testing into DevOps pipeline",
+      "description": "Integrate DAST tools in CI/CD pipelines to detect runtime vulnerabilities in deployed applications.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "11.5", "NIST SP 800-53": "SA-11", "PCI DSS": "6.6"}
+    },
+    "DS-6": {
+      "id": "DS-6",
+      "domain": "DS",
+      "title": "Enforce security of workload throughout DevOps lifecycle",
+      "description": "Enforce security gates, approvals, and compliance checks throughout the development and deployment lifecycle.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "11.6", "NIST SP 800-53": "SA-15", "PCI DSS": "6.3"}
+    },
+    "DS-7": {
+      "id": "DS-7",
+      "domain": "DS",
+      "title": "Ensure logging and monitoring in DevOps",
+      "description": "Enable audit logging for CI/CD pipelines, source repositories, and deployment activities.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "11.7", "NIST SP 800-53": "AU-2, AU-12", "PCI DSS": "10.1"}
+    },
+    "GS-1": {
+      "id": "GS-1",
+      "domain": "GS",
+      "title": "Align organization roles, responsibilities, and accountabilities",
+      "description": "Define clear security roles and responsibilities across the organization with documented accountability.",
+      "severity": "High",
+      "automated": false,
+      "mappings": {"CIS": "12.1", "NIST SP 800-53": "PM-1, PM-2", "PCI DSS": "12.1"}
+    },
+    "GS-2": {
+      "id": "GS-2",
+      "domain": "GS",
+      "title": "Define and implement enterprise segmentation/separation of duties strategy",
+      "description": "Establish enterprise-wide segmentation strategy aligned with management groups, subscriptions, and resource groups.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "12.2", "NIST SP 800-53": "AC-4, SC-7", "PCI DSS": "7.1"}
+    },
+    "GS-3": {
+      "id": "GS-3",
+      "domain": "GS",
+      "title": "Define and implement data protection strategy",
+      "description": "Establish a comprehensive data protection strategy covering classification, encryption, access control, and retention.",
+      "severity": "High",
+      "automated": false,
+      "mappings": {"CIS": "12.3", "NIST SP 800-53": "SC-28", "PCI DSS": "3.1"}
+    },
+    "GS-4": {
+      "id": "GS-4",
+      "domain": "GS",
+      "title": "Define and implement network security strategy",
+      "description": "Define a network security strategy covering network architecture, segmentation, perimeter defense, and traffic filtering.",
+      "severity": "High",
+      "automated": false,
+      "mappings": {"CIS": "12.4", "NIST SP 800-53": "SC-7", "PCI DSS": "1.1"}
+    },
+    "GS-5": {
+      "id": "GS-5",
+      "domain": "GS",
+      "title": "Define and implement security posture management strategy",
+      "description": "Implement continuous security posture management using Defender for Cloud secure score and compliance dashboards.",
+      "severity": "High",
+      "automated": true,
+      "mappings": {"CIS": "12.5", "NIST SP 800-53": "CA-2, RA-5", "PCI DSS": ""}
+    },
+    "GS-6": {
+      "id": "GS-6",
+      "domain": "GS",
+      "title": "Define and implement identity and privileged access strategy",
+      "description": "Establish an identity and privileged access strategy including MFA, Conditional Access, PIM, and identity governance.",
+      "severity": "High",
+      "automated": false,
+      "mappings": {"CIS": "12.6", "NIST SP 800-53": "AC-2, IA-2", "PCI DSS": "8.1"}
+    },
+    "GS-7": {
+      "id": "GS-7",
+      "domain": "GS",
+      "title": "Define and implement logging, threat detection, and incident response strategy",
+      "description": "Establish a comprehensive logging and threat detection strategy with Sentinel, Defender for Cloud, and incident response procedures.",
+      "severity": "High",
+      "automated": false,
+      "mappings": {"CIS": "12.7", "NIST SP 800-53": "IR-1, SI-4", "PCI DSS": "10.1"}
+    },
+    "GS-8": {
+      "id": "GS-8",
+      "domain": "GS",
+      "title": "Define and implement backup and recovery strategy",
+      "description": "Define backup and recovery strategy including RPO/RTO objectives, backup policies, and regular restore testing.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "12.8", "NIST SP 800-53": "CP-1, CP-2", "PCI DSS": ""}
+    },
+    "GS-9": {
+      "id": "GS-9",
+      "domain": "GS",
+      "title": "Define and implement endpoint security strategy",
+      "description": "Establish endpoint security strategy covering EDR, anti-malware, patch management, and secure configuration.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "12.9", "NIST SP 800-53": "SI-3", "PCI DSS": "5.1"}
+    },
+    "GS-10": {
+      "id": "GS-10",
+      "domain": "GS",
+      "title": "Define and implement DevOps security strategy",
+      "description": "Establish DevOps security strategy covering secure SDLC, supply chain security, and pipeline hardening.",
+      "severity": "Medium",
+      "automated": false,
+      "mappings": {"CIS": "12.10", "NIST SP 800-53": "SA-15", "PCI DSS": "6.3"}
+    },
+    "GS-11": {
+      "id": "GS-11",
+      "domain": "GS",
+      "title": "Define and implement multi-cloud security strategy",
+      "description": "Extend security governance across multi-cloud environments using Azure Arc, Defender for Cloud multi-cloud connectors.",
+      "severity": "Medium",
+      "automated": true,
+      "mappings": {"CIS": "12.11", "NIST SP 800-53": "PM-1", "PCI DSS": ""}
+    }
+  }
+}

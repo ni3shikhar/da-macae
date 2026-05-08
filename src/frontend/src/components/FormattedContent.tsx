@@ -515,19 +515,41 @@ interface BlobRef {
 
 /**
  * Scan text for blob upload result JSON objects.
- * Matches inline `{"status":"uploaded","container":"...","blob":"..."}`
- * as well as standalone JSON blocks.
+ * Uses bracket-counting to correctly handle nested JSON (e.g. a "summary" field).
+ * Matches objects containing "status":"uploaded" + "container" + "blob".
  */
 function extractBlobUploads(text: string): BlobRef[] {
   const results: BlobRef[] = [];
-  // Match any JSON-like object in the text
-  const regex = /\{[^{}]*"(?:status|container|blob)"[^{}]*\}/g;
-  let m: RegExpExecArray | null;
-  while ((m = regex.exec(text)) !== null) {
-    const parsed = tryParseJson(m[0]);
-    if (parsed && !Array.isArray(parsed) && isBlobUploadResult(parsed)) {
-      results.push({ container: parsed.container, blob: parsed.blob, raw: m[0] });
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] !== '{') { i++; continue; }
+    // Walk forward tracking depth, respecting string literals
+    let depth = 1;
+    let j = i + 1;
+    let inStr = false;
+    let esc = false;
+    while (j < text.length && depth > 0) {
+      const ch = text[j];
+      if (esc) { esc = false; }
+      else if (ch === '\\' && inStr) { esc = true; }
+      else if (ch === '"') { inStr = !inStr; }
+      else if (!inStr) {
+        if (ch === '{') depth++;
+        else if (ch === '}') depth--;
+      }
+      j++;
     }
+    if (depth === 0) {
+      const candidate = text.slice(i, j);
+      const parsed = tryParseJson(candidate);
+      if (parsed && !Array.isArray(parsed) && isBlobUploadResult(parsed as Record<string, unknown>)) {
+        const obj = parsed as { container: string; blob: string };
+        results.push({ container: obj.container, blob: obj.blob, raw: candidate });
+        i = j;
+        continue;
+      }
+    }
+    i++;
   }
   return results;
 }

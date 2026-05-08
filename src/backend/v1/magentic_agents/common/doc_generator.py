@@ -33,7 +33,7 @@ class DocumentResult:
     uploads: list[str]  # Blob upload JSON strings
 
 # ── Minimum content length to trigger document generation ───────────
-_MIN_REPORT_LENGTH = 300
+_MIN_REPORT_LENGTH = 500
 
 # Keywords in agent names or content that signal "report-like" output
 _REPORT_AGENT_KEYWORDS = {
@@ -41,24 +41,62 @@ _REPORT_AGENT_KEYWORDS = {
     "assessment", "audit", "summary", "migration",
 }
 
+# Subtask labels that indicate intermediate/data-gathering steps
+# where document generation should be SKIPPED.
+_INTERMEDIATE_SUBTASK_KEYWORDS = {
+    "list", "retrieve", "fetch", "discover", "connect",
+    "initialize", "setup", "configure", "verify", "check",
+    "load", "get", "query", "scan", "collect", "gather",
+    "identify", "enumerate", "catalog", "catalogue",
+}
 
-def _looks_like_report(text: str, agent_name: str) -> bool:
-    """Heuristic: does this output look like a report worth exporting?"""
+# Subtask labels that indicate final/report steps where document
+# generation SHOULD be triggered.
+_REPORT_SUBTASK_KEYWORDS = {
+    "report", "compile", "generate report", "produce report",
+    "summarize", "summarise", "final", "assessment report",
+    "excel report", "comprehensive", "consolidate",
+}
+
+
+def _looks_like_report(
+    text: str,
+    agent_name: str,
+    subtask_label: str | None = None,
+) -> bool:
+    """Heuristic: does this output look like a report worth exporting?
+
+    Skips document generation for intermediate/data-gathering subtasks
+    (e.g. 'List available subscriptions', 'Retrieve MCSB controls').
+    Only generates documents for final report or substantial analysis output.
+    """
     if len(text) < _MIN_REPORT_LENGTH:
         return False
-    name_lower = agent_name.lower()
-    if any(kw in name_lower for kw in _REPORT_AGENT_KEYWORDS):
-        return True
+
+    # ── Subtask-level gating ───────────────────────────────────────
+    if subtask_label:
+        label_lower = subtask_label.lower()
+        # Explicitly a report subtask → allow
+        if any(kw in label_lower for kw in _REPORT_SUBTASK_KEYWORDS):
+            return True
+        # Explicitly an intermediate subtask → skip
+        if any(
+            label_lower.startswith(kw) or f" {kw} " in f" {label_lower} "
+            for kw in _INTERMEDIATE_SUBTASK_KEYWORDS
+        ):
+            return False
+
+    # ── Content-based heuristic ────────────────────────────────────
     # Check content for report-like structure (headings, tables, lists)
     heading_count = len(re.findall(r"^#{1,4}\s", text, re.MULTILINE))
     table_count = len(re.findall(r"^\|", text, re.MULTILINE))
     list_count = len(re.findall(r"^[-*]\s", text, re.MULTILINE))
-    # Has meaningful structure
-    if heading_count >= 2:
+    # Needs substantial structure to qualify as a report
+    if heading_count >= 3 and (table_count >= 4 or list_count >= 8):
         return True
-    if table_count >= 4:
+    if table_count >= 8:
         return True
-    if heading_count >= 1 and (table_count >= 2 or list_count >= 5):
+    if heading_count >= 4 and list_count >= 10:
         return True
     return False
 
@@ -243,6 +281,23 @@ def _generate_word_doc(text: str, title: str) -> bytes:
             i += 1
             continue
 
+        # JSON block — try to convert to a table
+        if stripped.startswith("[") or (stripped.startswith("{") and '"status"' not in stripped[:50]):
+            json_lines = [lines[i]]
+            bracket_depth = stripped.count("[") + stripped.count("{") - stripped.count("]") - stripped.count("}")
+            i += 1
+            while i < len(lines) and bracket_depth > 0:
+                json_lines.append(lines[i])
+                bracket_depth += lines[i].count("[") + lines[i].count("{") - lines[i].count("]") - lines[i].count("}")
+                i += 1
+            json_text = "\n".join(json_lines)
+            if _try_add_json_table(doc, json_text):
+                continue
+            # Fallback — add as formatted text
+            para = doc.add_paragraph(json_text[:2000])
+            para.style = doc.styles.get("No Spacing", doc.styles["Normal"])
+            continue
+
         # Regular paragraph (skip empty lines)
         if stripped:
             para = doc.add_paragraph(stripped)
@@ -252,6 +307,84 @@ def _generate_word_doc(text: str, title: str) -> bytes:
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+def _try_add_json_table(doc: Any, json_text: str) -> bool:
+    """Try to parse JSON and add it as a Word table.
+
+    Handles both JSON arrays of objects and single objects.
+    Returns True if successful, False to fall back to text rendering.
+    """
+    from docx.shared import Pt
+
+    try:
+        data = json.loads(json_text)
+    except (json.JSONDecodeError, ValueError):
+        return False
+
+    # Normalise to list of flat dicts
+    rows: list[dict[str, str]] = []
+    if isinstance(data, dict):
+        # Single object — check for nested list (e.g. {"findings": [...]})
+        for v in data.values():
+            if isinstance(v, list) and v and isinstance(v[0], dict):
+                rows = v
+                break
+        if not rows:
+            rows = [data]
+    elif isinstance(data, list) and data and isinstance(data[0], dict):
+        rows = data
+    else:
+        return False
+
+    if not rows:
+        return False
+
+    # Pick display columns (skip very long or nested values)
+    all_keys = list(dict.fromkeys(k for row in rows[:50] for k in row.keys()))
+    display_keys = [
+        k for k in all_keys
+        if not any(
+            isinstance(row.get(k), (dict, list)) and len(str(row.get(k, ""))) > 200
+            for row in rows[:5]
+        )
+    ][:10]  # max 10 columns
+
+    if not display_keys:
+        return False
+
+    num_cols = len(display_keys)
+    table = doc.add_table(rows=1 + min(len(rows), 100), cols=num_cols)
+    try:
+        table.style = "Light Grid Accent 1"
+    except KeyError:
+        pass
+
+    # Header
+    for ci, key in enumerate(display_keys):
+        cell = table.rows[0].cells[ci]
+        cell.text = str(key).replace("_", " ").title()
+        for p in cell.paragraphs:
+            for run in p.runs:
+                run.bold = True
+                run.font.size = Pt(8)
+
+    # Data rows (cap at 100)
+    for ri, row in enumerate(rows[:100]):
+        for ci, key in enumerate(display_keys):
+            val = row.get(key, "")
+            if isinstance(val, (dict, list)):
+                val = json.dumps(val, default=str)[:150]
+            cell_text = str(val)[:200]
+            table.rows[ri + 1].cells[ci].text = cell_text
+            for p in table.rows[ri + 1].cells[ci].paragraphs:
+                for run in p.runs:
+                    run.font.size = Pt(7)
+
+    if len(rows) > 100:
+        doc.add_paragraph(f"... and {len(rows) - 100} more rows")
+
+    return True
 
 
 def _add_table_to_doc(doc: Any, table_lines: list[str]) -> None:
@@ -472,7 +605,7 @@ async def generate_and_upload_documents(
     - **Excel (.xlsx)**: Generated additionally when the output contains
       significant markdown tables (3+ data rows).
     """
-    if not _looks_like_report(text, agent_name):
+    if not _looks_like_report(text, agent_name, subtask_label):
         return []
 
     results: list[str] = []
@@ -544,8 +677,10 @@ async def generate_documents_with_summary(
     - **uploads**: Blob upload JSON strings for download cards
 
     Returns None if the text doesn't look like a report worth exporting.
+    Skips intermediate subtasks (list, retrieve, fetch, etc.) to avoid
+    generating unnecessary documents for data-gathering steps.
     """
-    if not _looks_like_report(text, agent_name):
+    if not _looks_like_report(text, agent_name, subtask_label):
         return None
 
     # Generate uploads using existing function logic

@@ -370,6 +370,7 @@ class AzureAgentBase:
         thread_id: str | None = None,
         on_progress: Any | None = None,
         subtask_label: str | None = None,
+        is_final_step: bool = False,
     ) -> dict[str, Any]:
         """Run the agent with a task and return the response.
 
@@ -402,6 +403,7 @@ class AzureAgentBase:
                     agent_name=self.name,
                     on_progress=on_progress,
                     subtask_label=subtask_label,
+                    is_final_step=is_final_step,
                 )
 
             # ── Mode 2b: Azure OpenAI + MCP tool calling ──────────
@@ -423,6 +425,7 @@ class AzureAgentBase:
                     agent_name=self.name,
                     on_progress=on_progress,
                     subtask_label=subtask_label,
+                    is_final_step=is_final_step,
                 )
 
             # ── Mode 3: Simulated (no clients available) ───────────

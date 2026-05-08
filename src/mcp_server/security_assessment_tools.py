@@ -192,7 +192,7 @@ def _get_subscription_client():
     """Lazy-init Azure Subscription client."""
     global _sec_subscription_client
     if _sec_subscription_client is None:
-        from azure.mgmt.subscription import SubscriptionClient
+        from azure.mgmt.resource import SubscriptionClient
         _sec_subscription_client = SubscriptionClient(_get_credential())
     return _sec_subscription_client
 
@@ -521,7 +521,7 @@ async def sec_assess_network_security() -> str:
                         ))
             
             # NS-2: Private endpoints
-            private_endpoints = list(network.private_endpoints.list_all())
+            private_endpoints = list(network.private_endpoints.list_by_subscription())
             if len(private_endpoints) == 0:
                 findings.append(_create_finding(
                     "NS-2", "Secure cloud native services with network controls",

@@ -154,6 +154,7 @@ class FoundryAgentTemplate:
                 task=prompt, thread_id=context.thread_id,
                 on_progress=on_progress,
                 subtask_label=context.subtask_label,
+                is_final_step=context.is_final_step,
             )
             duration = time.monotonic() - start
 

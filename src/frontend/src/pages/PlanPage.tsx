@@ -14,7 +14,6 @@ import {
   Textarea,
   ProgressBar,
   Divider,
-  Switch,
   makeStyles,
   tokens,
   mergeClasses,
@@ -457,106 +456,10 @@ export default function PlanPage() {
   const [stepLiveInfo, setStepLiveInfo] = useState<Map<number, StepLiveInfo>>(new Map());
   const [subtaskAnswerText, setSubtaskAnswerText] = useState<Map<number, string>>(new Map());
   const [cancelling, setCancelling] = useState(false);
-  const [autoApproveSteps, setAutoApproveSteps] = useState<Set<number>>(new Set());
-  const autoApproveRef = useRef<Set<number>>(new Set());
   const messagesEnd = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
   const wsRef = useRef<WebSocketService | null>(null);
-
-  // Keep ref in sync with state so WS handler reads latest value
-  useEffect(() => {
-    autoApproveRef.current = autoApproveSteps;
-  }, [autoApproveSteps]);
-
-  // Toggle auto-approve for a step's sub-tasks
-  const toggleAutoApprove = useCallback((stepNum: number) => {
-    setAutoApproveSteps((prev) => {
-      const next = new Set(prev);
-      if (next.has(stepNum)) {
-        next.delete(stepNum);
-      } else {
-        next.add(stepNum);
-      }
-      return next;
-    });
-  }, []);
-
-  // ── Retroactive auto-approve effect ──
-  // When auto-approve is toggled ON for a step that is already awaiting
-  // approval or subtask input, immediately fire the approval so the user
-  // doesn't have to wait for a future WS message.
-  useEffect(() => {
-    if (!plan || autoApproveSteps.size === 0) return;
-
-    for (const stepNum of autoApproveSteps) {
-      const info = stepLiveInfo.get(stepNum);
-      if (!info) continue;
-
-      // Retroactively approve the step if it's awaiting step-level approval
-      if (info.awaitingApproval) {
-        console.log(`[auto-approve] Retroactively approving step ${stepNum}`);
-        approveStep(plan.plan_id, USER_ID, stepNum, true, "")
-          .then(() => {
-            // Clear the awaiting flag
-            setStepLiveInfo((prev) => {
-              const next = new Map(prev);
-              const existing = next.get(stepNum);
-              if (existing) {
-                next.set(stepNum, { ...existing, awaitingApproval: false });
-              }
-              return next;
-            });
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: crypto.randomUUID(),
-                plan_id: plan.plan_id,
-                step_id: "",
-                agent: "system",
-                content: `Auto-approved Step ${stepNum} — execution will begin.`,
-                timestamp: new Date().toISOString(),
-              },
-            ]);
-          })
-          .catch((err) => console.error("Retroactive auto-approve step failed:", err));
-        // Only fire once per step — the flag will be cleared by .then()
-        continue;
-      }
-
-      // Retroactively continue the subtask if it's awaiting subtask input
-      if (info.awaitingSubtaskInput) {
-        const subtaskId = info.awaitingSubtaskInput.subtaskId;
-        const label = info.awaitingSubtaskInput.subtaskLabel;
-        const idx = info.awaitingSubtaskInput.subtaskIndex + 1;
-        const total = info.awaitingSubtaskInput.totalSubtasks;
-        console.log(`[auto-approve] Retroactively continuing subtask ${subtaskId} for step ${stepNum}`);
-        sendSubtaskResponse(plan.plan_id, USER_ID, stepNum, subtaskId, "continue", "")
-          .then(() => {
-            // Clear the awaiting flag
-            setStepLiveInfo((prev) => {
-              const next = new Map(prev);
-              const existing = next.get(stepNum);
-              if (existing) {
-                next.set(stepNum, { ...existing, awaitingSubtaskInput: undefined });
-              }
-              return next;
-            });
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: crypto.randomUUID(),
-                plan_id: plan.plan_id,
-                step_id: "",
-                agent: "system",
-                content: `Auto-approved sub-task ${idx}/${total}: "${label}" — continuing.`,
-                timestamp: new Date().toISOString(),
-              },
-            ]);
-          })
-          .catch((err) => console.error("Retroactive auto-approve subtask failed:", err));
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoApproveSteps, stepLiveInfo, plan?.plan_id]);
 
   // Toggle a step card expansion
   const toggleStep = useCallback((stepNum: number) => {
@@ -605,9 +508,18 @@ export default function PlanPage() {
     );
   }, [plan?.m_plan?.steps, stepLiveInfo]);
 
-  // Scroll chat to bottom on new messages
+  // Track whether user is near the bottom of the chat
+  const handleScroll = useCallback(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+  }, []);
+
+  // Scroll chat to bottom on new messages only when user is already at the bottom
   useEffect(() => {
-    messagesEnd.current?.scrollIntoView({ behavior: "smooth" });
+    if (isAtBottomRef.current) {
+      messagesEnd.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages]);
 
   // Polling fallback — periodically refresh plan + messages while active
@@ -772,25 +684,6 @@ export default function PlanPage() {
                 return next;
               });
             }
-            // Add chat message with output when step completes
-            if (data.status === StepStatus.COMPLETED && data.output) {
-              const stepAgent = plan?.m_plan?.steps.find(s => s.step_number === stepNum)?.agent || "Agent";
-              const stepTask = plan?.m_plan?.steps.find(s => s.step_number === stepNum)?.task || "";
-              const outputStr = data.output as string;
-              // Show full output in chat (FormattedContent will handle rendering)
-              const chatContent = `**Step ${stepNum} completed:** ${stepTask}\n\n${outputStr}`;
-              setMessages((prev) => [
-                ...prev,
-                {
-                  id: crypto.randomUUID(),
-                  plan_id: (data.plan_id as string) ?? plan?.plan_id ?? "",
-                  step_id: "",
-                  agent: stepAgent,
-                  content: chatContent,
-                  timestamp: new Date().toISOString(),
-                },
-              ]);
-            }
           }
           break;
         }
@@ -896,54 +789,6 @@ export default function PlanPage() {
           // A sub-task completed — system is waiting for user input before proceeding
           const siStep = data.step_number as number;
           if (siStep != null) {
-            // Check if auto-approve is enabled for this step
-            const isAutoApproved = autoApproveRef.current.has(siStep);
-
-            if (isAutoApproved) {
-              // Auto-approve: immediately send "continue" without showing the input gate
-              const siPlanId = (data.plan_id as string) ?? "";
-              const siSubtaskId = data.subtask_id as string;
-              sendSubtaskResponse(
-                siPlanId,
-                USER_ID,
-                siStep,
-                siSubtaskId,
-                "continue",
-                "",
-              ).catch((err) => {
-                console.error("Auto-approve subtask failed:", err);
-              });
-
-              // Still show the chat message but mark it as auto-approved
-              const stIdx = (data.subtask_index as number) + 1;
-              const stTotal = data.total_subtasks as number;
-              const isLast = (data.is_last_subtask as boolean) || false;
-              const resultPreview = (data.result_preview as string) || "";
-
-              let chatMsg = `**Sub-task ${stIdx}/${stTotal} auto-approved:** "${data.subtask_label}"`;
-              if (resultPreview) {
-                chatMsg += `\n\n**Result:**\n${resultPreview}`;
-                if (resultPreview.length >= 300) {
-                  chatMsg += "\n\n*...output truncated. See step details for full output.*";
-                }
-              }
-              if (isLast) {
-                chatMsg += "\n\n*All sub-tasks auto-approved and completed.*";
-              }
-
-              setMessages((prev) => [
-                ...prev,
-                {
-                  id: crypto.randomUUID(),
-                  plan_id: siPlanId,
-                  step_id: "",
-                  agent: "system",
-                  content: chatMsg,
-                  timestamp: new Date().toISOString(),
-                },
-              ]);
-              break;
-            }
 
             setStepLiveInfo((prev) => {
               const next = new Map(prev);
@@ -972,7 +817,6 @@ export default function PlanPage() {
             const stIdx = (data.subtask_index as number) + 1;
             const stTotal = data.total_subtasks as number;
             const isLast = (data.is_last_subtask as boolean) || false;
-            const resultPreview = (data.result_preview as string) || "";
             const stepAgent = plan?.m_plan?.steps.find(s => s.step_number === siStep)?.agent || "Agent";
             
             // Build chat message with result preview
@@ -980,13 +824,7 @@ export default function PlanPage() {
               ? `**Sub-task ${stIdx}/${stTotal} completed:** "${data.subtask_label}"\n\nAll sub-tasks done — provide any final input or confirm to finish.`
               : `**Sub-task ${stIdx}/${stTotal} completed:** "${data.subtask_label}"`;
             
-            // Append result preview if available
-            if (resultPreview) {
-              chatMsg += `\n\n**Result:**\n${resultPreview}`;
-              if (resultPreview.length >= 300) {
-                chatMsg += "\n\n*...output truncated. See step details for full output.*";
-              }
-            }
+
             
             if (!isLast && data.next_subtask) {
               chatMsg += `\n\n**Next:** ${data.next_subtask}`;
@@ -1010,28 +848,6 @@ export default function PlanPage() {
           // Agent sub-tasks generated — waiting for user to approve/reject this step
           const saStep = data.step_number as number;
           if (saStep != null) {
-            const isStepAutoApproved = autoApproveRef.current.has(saStep);
-
-            if (isStepAutoApproved) {
-              // Auto-approve step immediately and log to chat
-              const saPlanId = (data.plan_id as string) ?? plan?.plan_id ?? "";
-              approveStep(saPlanId, USER_ID, saStep, true, "").catch((err) => {
-                console.error("Auto-approve step failed:", err);
-              });
-              setMessages((prev) => [
-                ...prev,
-                {
-                  id: crypto.randomUUID(),
-                  plan_id: saPlanId,
-                  step_id: "",
-                  agent: "system",
-                  content: `Auto-approved agent "${data.agent}" (Step ${saStep}) — execution will begin.`,
-                  timestamp: new Date().toISOString(),
-                },
-              ]);
-              break;
-            }
-
             setStepLiveInfo((prev) => {
               const next = new Map(prev);
               const existing = next.get(saStep) || { status: "in_progress", message: "" };
@@ -1406,10 +1222,6 @@ export default function PlanPage() {
   function renderStepCard(step: PlanStep, idx: number) {
     const isExpanded = expandedSteps.has(step.step_number);
     const liveInfo = stepLiveInfo.get(step.step_number);
-    // Prefer live info output, fall back to step.output from plan state
-    const rawOutput = liveInfo?.output || step.output || "";
-    // Strip [SIMULATED] prefix for display
-    const output = rawOutput.startsWith("[SIMULATED] ") ? rawOutput.slice(12) : rawOutput;
     const error = liveInfo?.error || step.error || "";
     const duration = liveInfo?.duration || "";
     const isRunning = step.status === StepStatus.IN_PROGRESS;
@@ -1468,21 +1280,6 @@ export default function PlanPage() {
               />
             </div>
           </div>
-
-          {/* Auto-approve toggle — shown for pending/running steps */}
-          {(step.status === StepStatus.PENDING || isRunning) && (
-            <div
-              style={{ paddingLeft: "36px", marginTop: "4px" }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <Switch
-                checked={autoApproveSteps.has(step.step_number)}
-                onChange={() => toggleAutoApprove(step.step_number)}
-                label="Auto-approve all sub-tasks"
-                style={{ fontSize: tokens.fontSizeBase200 }}
-              />
-            </div>
-          )}
 
           {/* Running indicator */}
           {isRunning && !liveInfo?.subtasks?.length && !liveInfo?.awaitingApproval && (
@@ -1802,35 +1599,7 @@ export default function PlanPage() {
             </div>
           )}
 
-          {/* Completed sub-tasks summary — shown when step is done */}
-          {isExpanded && isDone && liveInfo?.subtasks && liveInfo.subtasks.length > 0 && (
-            <div style={{ marginTop: "4px", paddingLeft: "36px", display: "flex", flexDirection: "column", gap: "1px" }}>
-              {liveInfo.subtasks.map((st) => (
-                <div
-                  key={st.id}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    padding: "2px 0",
-                    fontSize: tokens.fontSizeBase200,
-                    color: tokens.colorPaletteGreenForeground1,
-                  }}
-                >
-                  <CheckmarkCircle24Filled
-                    primaryFill={tokens.colorPaletteGreenForeground1}
-                    style={{ width: 16, height: 16, flexShrink: 0 }}
-                  />
-                  <span>{st.label}</span>
-                </div>
-              ))}
-              {liveInfo.toolCalls && liveInfo.toolCalls.length > 0 && (
-                <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: "2px", paddingLeft: "24px" }}>
-                  {liveInfo.toolCalls.length} tool call{liveInfo.toolCalls.length > 1 ? "s" : ""} executed
-                </Caption1>
-              )}
-            </div>
-          )}
+
 
           {/* Completed step with tool calls but no sub-tasks */}
           {isExpanded && isDone && !liveInfo?.subtasks?.length && liveInfo?.toolCalls && liveInfo.toolCalls.length > 0 && (
@@ -1841,17 +1610,28 @@ export default function PlanPage() {
             </div>
           )}
 
-          {/* Expanded output section */}
-          {isExpanded && (isDone || isFailed || output || error) && (
+          {/* Step summary — shown when completed and expanded */}
+          {isExpanded && isDone && step.output && (
+            <div style={{
+              marginTop: "6px",
+              paddingLeft: "36px",
+              fontSize: tokens.fontSizeBase200,
+              color: tokens.colorNeutralForeground2,
+              lineHeight: "1.4",
+            }}>
+              <Caption1 style={{ fontStyle: "italic" }}>
+                {step.output.length > 200
+                  ? step.output.replace(/[#*`]/g, "").substring(0, 200).trimEnd() + "\u2026"
+                  : step.output.replace(/[#*`]/g, "")}
+              </Caption1>
+            </div>
+          )}
+
+          {/* Error section */}
+          {isExpanded && (isFailed || error) && (
             <>
               <Divider style={{ margin: "8px 0" }} />
               {error && <div className={styles.stepError}>{error}</div>}
-              {output && <div className={styles.stepOutput}><FormattedContent content={output} compact /></div>}
-              {!output && !error && isDone && (
-                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                  Completed — no output captured
-                </Caption1>
-              )}
             </>
           )}
         </div>
@@ -1991,7 +1771,7 @@ export default function PlanPage() {
 
         {/* ── Chat Area ── */}
         <div className={styles.chatArea}>
-          <div className={styles.messages}>
+          <div className={styles.messages} ref={messagesContainerRef} onScroll={handleScroll}>
             {messages.length === 0 && (
               <div className={styles.systemMsg}>Waiting for agent activity...</div>
             )}
