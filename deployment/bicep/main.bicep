@@ -185,6 +185,7 @@ module containerApps 'modules/container-apps.bicep' = {
     environment: environment
     location: location
     acrLoginServer: acr.outputs.loginServer
+    acrName: acr.outputs.name
     logAnalyticsWorkspaceName: monitoring.outputs.logAnalyticsWorkspaceName
     tags: tags
   }
