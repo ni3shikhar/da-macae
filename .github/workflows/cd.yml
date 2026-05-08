@@ -218,6 +218,7 @@ jobs:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
           azd env select ${{ needs.setup.outputs.environment }}
+          azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT "${{ steps.acr.outputs.login_server }}"
           azd deploy --no-prompt
 
       - name: Get endpoints
@@ -281,6 +282,9 @@ jobs:
           azd provision --no-prompt
           azd env set AZURE_RESOURCE_GROUP "damacae-rg"
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
+          ACR_SERVER=$(az acr list -g "damacae-rg" --query "[0].loginServer" -o tsv 2>/dev/null || echo "")
+          azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT "$ACR_SERVER"
           azd deploy --no-prompt
 
       - name: Production deployment summary
