@@ -60,7 +60,8 @@ COPY --from=frontend-build /app/dist /usr/share/nginx/html
 # Nginx config template — BACKEND_URL is substituted at container startup
 COPY src/frontend/nginx.conf.template /etc/nginx/nginx.conf.template
 COPY src/frontend/docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+# Strip Windows CRLF line endings and make executable
+RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
 
 EXPOSE 80
 
