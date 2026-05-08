@@ -211,65 +211,57 @@ jobs:
           cache-from: type=gha,scope=mcp
           cache-to: type=gha,mode=max,scope=mcp
 
-      # ── Wire ACR managed-identity auth on each Container App ────────────
-      # azd deploy updates the image but does NOT configure registries.
-      # Without this, the Container App runtime has no credentials to pull
-      # from ACR and the revision fails with UNAUTHORIZED.
-      # We retry a few times to allow AcrPull role assignments to propagate.
-      - name: Configure ACR registry on Container Apps
+      # ── Deploy Applications ─────────────────────────────────────────────
+      # Use az containerapp update with our pre-built images instead of
+      # azd deploy. azd deploy rebuilds images internally with a different
+      # naming scheme and those revisions never pass Container Apps health
+      # probes. Our pre-built images (agentra-*:TAG) are stable and correct.
+      - name: Deploy to Container Apps
         run: |
           ENV="${{ needs.setup.outputs.environment }}"
           RG="damacae-rg-${ENV}"
           if [ "$ENV" == "prod" ]; then RG="damacae-rg"; fi
-          ACR_SERVER="${{ steps.acr.outputs.login_server }}"
-
-          configure_registry() {
-            local APP="$1"
-            echo "Configuring ACR registry on $APP..."
-            for i in 1 2 3 4 5; do
-              if az containerapp registry set \
-                --name "$APP" \
-                --resource-group "$RG" \
-                --server "$ACR_SERVER" \
-                --identity system; then
-                echo "✓ $APP configured"
-                return 0
-              fi
-              echo "  attempt $i failed, waiting 20s for role assignment propagation..."
-              sleep 20
-            done
-            echo "⚠ Could not configure managed identity for $APP, falling back to admin credentials"
-            ACR_NAME="${{ steps.acr.outputs.name }}"
-            ACR_PASS=$(az acr credential show -n "$ACR_NAME" --query "passwords[0].value" -o tsv)
-            az containerapp registry set \
-              --name "$APP" \
-              --resource-group "$RG" \
-              --server "$ACR_SERVER" \
-              --username "$ACR_NAME" \
-              --password "$ACR_PASS"
-          }
-
+          ACR="${{ steps.acr.outputs.login_server }}"
+          TAG="${{ needs.setup.outputs.image_tag }}"
           SUFFIX="${ENV}"
           if [ "$ENV" == "prod" ]; then SUFFIX=""; fi
 
-          configure_registry "damacae-backend${SUFFIX:+-$SUFFIX}"
-          configure_registry "damacae-frontend${SUFFIX:+-$SUFFIX}"
-          configure_registry "damacae-mcp${SUFFIX:+-$SUFFIX}"
+          deploy_app() {
+            local APP="$1" IMAGE="$2"
+            echo "Deploying $IMAGE → $APP"
+            az containerapp update \
+              --name "$APP" \
+              --resource-group "$RG" \
+              --image "$IMAGE" \
+              --no-wait
+          }
 
-      # ── Deploy Applications ──────────────────────────────────────────────
-      - name: AZD Deploy
-        env:
-          AZURE_ENV_NAME: ${{ needs.setup.outputs.environment }}
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: |
-          azd env select ${{ needs.setup.outputs.environment }}
-          azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT "${{ steps.acr.outputs.login_server }}"
-          azd deploy --no-prompt
+          deploy_app "damacae-backend${SUFFIX:+-$SUFFIX}"  "${ACR}/agentra-backend:${TAG}"
+          deploy_app "damacae-frontend${SUFFIX:+-$SUFFIX}" "${ACR}/agentra-frontend:${TAG}"
+          deploy_app "damacae-mcp${SUFFIX:+-$SUFFIX}"      "${ACR}/agentra-mcp:${TAG}"
+
+          # Wait for all three to finish
+          for APP in "damacae-backend${SUFFIX:+-$SUFFIX}" "damacae-frontend${SUFFIX:+-$SUFFIX}" "damacae-mcp${SUFFIX:+-$SUFFIX}"; do
+            echo "Waiting for $APP..."
+            az containerapp revision list --name "$APP" --resource-group "$RG" \
+              --query "[-1].name" -o tsv | xargs -I{} \
+              az containerapp revision show --name "$APP" --resource-group "$RG" --revision {} \
+              --query "properties.provisioningState" -o tsv || true
+          done
 
       - name: Get endpoints
         id: endpoints
         run: |
-          FRONTEND_URL=$(azd env get-values | grep -i "FRONTEND.*URL\|SERVICE_FRONTEND.*ENDPOINT" | head -1 | cut -d= -f2 | tr -d '"' || echo "")
+          ENV="${{ needs.setup.outputs.environment }}"
+          RG="damacae-rg-${ENV}"
+          if [ "$ENV" == "prod" ]; then RG="damacae-rg"; fi
+          SUFFIX="${ENV}"
+          if [ "$ENV" == "prod" ]; then SUFFIX=""; fi
+          FRONTEND_URL=$(az containerapp show \
+            --name "damacae-frontend${SUFFIX:+-$SUFFIX}" \
+            --resource-group "$RG" \
+            --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || echo "")
+          if [ -n "$FRONTEND_URL" ]; then FRONTEND_URL="https://${FRONTEND_URL}"; fi
           echo "frontend_url=${FRONTEND_URL}" >> $GITHUB_OUTPUT
 
       - name: Deployment summary
@@ -306,7 +298,13 @@ jobs:
       - name: Install Azure Developer CLI
         uses: Azure/setup-azd@v2
 
-      - name: Provision & Deploy Production
+      - name: Get admin object ID
+        id: admin
+        run: |
+          ADMIN_OID=$(az ad sp show --id ${{ secrets.AZURE_CLIENT_ID }} --query id -o tsv)
+          echo "object_id=$ADMIN_OID" >> $GITHUB_OUTPUT
+
+      - name: AZD Provision Production
         env:
           AZURE_ENV_NAME: prod
           AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
@@ -320,7 +318,7 @@ jobs:
           azd env new prod || true
           azd env select prod
           azd env set AZURE_LOCATION "${{ vars.AZURE_LOCATION }}"
-          azd env config set infra.parameters.adminObjectId "${{ secrets.ADMIN_OBJECT_ID }}"
+          azd env config set infra.parameters.adminObjectId "${{ steps.admin.outputs.object_id }}"
           azd env config set infra.parameters.environment "prod"
           azd env config set infra.parameters.projectName "damacae"
 
@@ -328,9 +326,75 @@ jobs:
           azd env set AZURE_RESOURCE_GROUP "damacae-rg"
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
+      - name: Get ACR details
+        id: acr
+        run: |
+          ACR_NAME=$(az acr list -g "damacae-rg" --query "[0].name" -o tsv 2>/dev/null || echo "")
           ACR_SERVER=$(az acr list -g "damacae-rg" --query "[0].loginServer" -o tsv 2>/dev/null || echo "")
-          azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT "$ACR_SERVER"
-          azd deploy --no-prompt
+          echo "name=${ACR_NAME}" >> $GITHUB_OUTPUT
+          echo "login_server=${ACR_SERVER}" >> $GITHUB_OUTPUT
+
+      - name: Login to ACR
+        run: az acr login --name ${{ steps.acr.outputs.name }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: backend
+          push: true
+          tags: |
+            ${{ steps.acr.outputs.login_server }}/agentra-backend:${{ needs.setup.outputs.image_tag }}
+            ${{ steps.acr.outputs.login_server }}/agentra-backend:latest
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build & push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: frontend
+          push: true
+          tags: |
+            ${{ steps.acr.outputs.login_server }}/agentra-frontend:${{ needs.setup.outputs.image_tag }}
+            ${{ steps.acr.outputs.login_server }}/agentra-frontend:latest
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Build & push mcp-server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: mcp-server
+          push: true
+          tags: |
+            ${{ steps.acr.outputs.login_server }}/agentra-mcp:${{ needs.setup.outputs.image_tag }}
+            ${{ steps.acr.outputs.login_server }}/agentra-mcp:latest
+          cache-from: type=gha,scope=mcp
+          cache-to: type=gha,mode=max,scope=mcp
+
+      - name: Deploy to Container Apps
+        run: |
+          ACR="${{ steps.acr.outputs.login_server }}"
+          TAG="${{ needs.setup.outputs.image_tag }}"
+
+          az containerapp update --name "damacae-backend"  --resource-group "damacae-rg" --image "${ACR}/agentra-backend:${TAG}"  --no-wait
+          az containerapp update --name "damacae-frontend" --resource-group "damacae-rg" --image "${ACR}/agentra-frontend:${TAG}" --no-wait
+          az containerapp update --name "damacae-mcp"      --resource-group "damacae-rg" --image "${ACR}/agentra-mcp:${TAG}"      --no-wait
+
+          for APP in damacae-backend damacae-frontend damacae-mcp; do
+            echo "Waiting for $APP..."
+            az containerapp revision list --name "$APP" --resource-group "damacae-rg" \
+              --query "[-1].name" -o tsv | xargs -I{} \
+              az containerapp revision show --name "$APP" --resource-group "damacae-rg" --revision {} \
+              --query "properties.provisioningState" -o tsv || true
+          done
 
       - name: Production deployment summary
         run: |
