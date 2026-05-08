@@ -211,6 +211,51 @@ jobs:
           cache-from: type=gha,scope=mcp
           cache-to: type=gha,mode=max,scope=mcp
 
+      # ── Wire ACR managed-identity auth on each Container App ────────────
+      # azd deploy updates the image but does NOT configure registries.
+      # Without this, the Container App runtime has no credentials to pull
+      # from ACR and the revision fails with UNAUTHORIZED.
+      # We retry a few times to allow AcrPull role assignments to propagate.
+      - name: Configure ACR registry on Container Apps
+        run: |
+          ENV="${{ needs.setup.outputs.environment }}"
+          RG="damacae-rg-${ENV}"
+          if [ "$ENV" == "prod" ]; then RG="damacae-rg"; fi
+          ACR_SERVER="${{ steps.acr.outputs.login_server }}"
+
+          configure_registry() {
+            local APP="$1"
+            echo "Configuring ACR registry on $APP..."
+            for i in 1 2 3 4 5; do
+              if az containerapp registry set \
+                --name "$APP" \
+                --resource-group "$RG" \
+                --server "$ACR_SERVER" \
+                --identity system; then
+                echo "✓ $APP configured"
+                return 0
+              fi
+              echo "  attempt $i failed, waiting 20s for role assignment propagation..."
+              sleep 20
+            done
+            echo "⚠ Could not configure managed identity for $APP, falling back to admin credentials"
+            ACR_NAME="${{ steps.acr.outputs.name }}"
+            ACR_PASS=$(az acr credential show -n "$ACR_NAME" --query "passwords[0].value" -o tsv)
+            az containerapp registry set \
+              --name "$APP" \
+              --resource-group "$RG" \
+              --server "$ACR_SERVER" \
+              --username "$ACR_NAME" \
+              --password "$ACR_PASS"
+          }
+
+          SUFFIX="${ENV}"
+          if [ "$ENV" == "prod" ]; then SUFFIX=""; fi
+
+          configure_registry "damacae-backend${SUFFIX:+-$SUFFIX}"
+          configure_registry "damacae-frontend${SUFFIX:+-$SUFFIX}"
+          configure_registry "damacae-mcp${SUFFIX:+-$SUFFIX}"
+
       # ── Deploy Applications ──────────────────────────────────────────────
       - name: AZD Deploy
         env:
