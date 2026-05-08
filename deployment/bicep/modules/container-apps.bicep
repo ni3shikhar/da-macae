@@ -128,6 +128,12 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json('0.25')
             memory: '0.5Gi'
           }
+          env: [
+            {
+              name: 'BACKEND_URL'
+              value: 'http://${projectName}-backend${envSuffix}'
+            }
+          ]
         }
       ]
       scale: {

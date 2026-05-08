@@ -57,8 +57,10 @@ FROM nginx:1.27-alpine AS frontend
 # Copy built assets
 COPY --from=frontend-build /app/dist /usr/share/nginx/html
 
-# Nginx config: SPA routing + API/WS proxy
-COPY src/frontend/nginx.conf /etc/nginx/conf.d/default.conf
+# Nginx config template — BACKEND_URL is substituted at container startup
+COPY src/frontend/nginx.conf.template /etc/nginx/nginx.conf.template
+COPY src/frontend/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
 EXPOSE 80
 
@@ -66,6 +68,7 @@ LABEL maintainer="DA-MACAÉ Team" \
       version="2.0.0" \
       description="DA-MACAÉ Frontend — React + Fluent UI"
 
+ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["nginx", "-g", "daemon off;"]
 
 
