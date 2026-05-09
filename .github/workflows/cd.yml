@@ -92,18 +92,36 @@ jobs:
           echo "object_id=$ADMIN_OID" >> $GITHUB_OUTPUT
 
       # ── Infrastructure Provisioning ──────────────────────────────────────
-      - name: Purge soft-deleted Key Vaults
+      - name: Purge soft-deleted resources
         if: ${{ github.event.inputs.skip_infra != 'true' }}
         run: |
+          SUB="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          LOC="${{ vars.AZURE_LOCATION }}"
+
+          # Key Vaults (soft-delete retains names for 7 days on dev)
           az keyvault list-deleted \
-            --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+            --subscription "$SUB" \
             --query "[?starts_with(name, 'damacae-kv')].name" -o tsv 2>/dev/null \
           | while IFS= read -r kv; do
               [ -z "$kv" ] && continue
               echo "Purging soft-deleted Key Vault: $kv"
-              az keyvault purge --name "$kv" \
-                --location "${{ vars.AZURE_LOCATION }}" \
-                --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}" || true
+              az keyvault purge --name "$kv" --location "$LOC" --subscription "$SUB" || true
+            done
+
+          # Azure OpenAI / Cognitive Services (soft-delete by default)
+          az rest \
+            --method GET \
+            --url "https://management.azure.com/subscriptions/${SUB}/providers/Microsoft.CognitiveServices/deletedAccounts?api-version=2023-05-01" \
+            --query "value[?starts_with(name, 'damacae-oai')]" -o json 2>/dev/null \
+          | jq -c '.[]' 2>/dev/null \
+          | while IFS= read -r item; do
+              NAME=$(echo "$item" | jq -r '.name')
+              ILOC=$(echo "$item" | jq -r '.location')
+              RG=$(echo "$item" | jq -r '.id' | cut -d'/' -f5)
+              [ -z "$NAME" ] && continue
+              echo "Purging soft-deleted OpenAI account: $NAME (rg=$RG, loc=$ILOC)"
+              az cognitiveservices account purge \
+                --name "$NAME" --resource-group "$RG" --location "$ILOC" || true
             done
 
       - name: AZD Provision
@@ -318,17 +336,35 @@ jobs:
           ADMIN_OID=$(az ad sp show --id ${{ secrets.AZURE_CLIENT_ID }} --query id -o tsv)
           echo "object_id=$ADMIN_OID" >> $GITHUB_OUTPUT
 
-      - name: Purge soft-deleted Key Vaults
+      - name: Purge soft-deleted resources
         run: |
+          SUB="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          LOC="${{ vars.AZURE_LOCATION }}"
+
+          # Key Vaults
           az keyvault list-deleted \
-            --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+            --subscription "$SUB" \
             --query "[?starts_with(name, 'damacae-kv')].name" -o tsv 2>/dev/null \
           | while IFS= read -r kv; do
               [ -z "$kv" ] && continue
               echo "Purging soft-deleted Key Vault: $kv"
-              az keyvault purge --name "$kv" \
-                --location "${{ vars.AZURE_LOCATION }}" \
-                --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}" || true
+              az keyvault purge --name "$kv" --location "$LOC" --subscription "$SUB" || true
+            done
+
+          # Azure OpenAI / Cognitive Services
+          az rest \
+            --method GET \
+            --url "https://management.azure.com/subscriptions/${SUB}/providers/Microsoft.CognitiveServices/deletedAccounts?api-version=2023-05-01" \
+            --query "value[?starts_with(name, 'damacae-oai')]" -o json 2>/dev/null \
+          | jq -c '.[]' 2>/dev/null \
+          | while IFS= read -r item; do
+              NAME=$(echo "$item" | jq -r '.name')
+              ILOC=$(echo "$item" | jq -r '.location')
+              RG=$(echo "$item" | jq -r '.id' | cut -d'/' -f5)
+              [ -z "$NAME" ] && continue
+              echo "Purging soft-deleted OpenAI account: $NAME (rg=$RG, loc=$ILOC)"
+              az cognitiveservices account purge \
+                --name "$NAME" --resource-group "$RG" --location "$ILOC" || true
             done
 
       - name: AZD Provision Production
