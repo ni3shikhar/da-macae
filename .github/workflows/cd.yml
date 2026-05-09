@@ -98,31 +98,42 @@ jobs:
           SUB="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           LOC="${{ vars.AZURE_LOCATION }}"
 
-          # Key Vaults (soft-delete retains names for 7 days on dev)
+          # ── Key Vaults ─────────────────────────────────────────────────────
+          echo "=== Key Vault soft-delete purge ==="
           az keyvault list-deleted \
             --subscription "$SUB" \
-            --query "[?starts_with(name, 'damacae-kv')].name" -o tsv 2>/dev/null \
+            --query "[?starts_with(name, 'damacae-kv')].name" -o tsv 2>&1 \
           | while IFS= read -r kv; do
               [ -z "$kv" ] && continue
-              echo "Purging soft-deleted Key Vault: $kv"
-              az keyvault purge --name "$kv" --location "$LOC" --subscription "$SUB" || true
+              echo "Purging Key Vault: $kv"
+              az keyvault purge --name "$kv" --location "$LOC" --subscription "$SUB" 2>&1 || true
             done
 
-          # Azure OpenAI / Cognitive Services (soft-delete by default)
-          az rest \
+          # ── Azure OpenAI / Cognitive Services ──────────────────────────────
+          # Store response first (pipe-chain breaks silently when az rest errors)
+          echo "=== OpenAI soft-delete purge ==="
+          OAI_DELETED=$(az rest \
             --method GET \
-            --url "https://management.azure.com/subscriptions/${SUB}/providers/Microsoft.CognitiveServices/deletedAccounts?api-version=2023-05-01" \
-            --query "value[?starts_with(name, 'damacae-oai')]" -o json 2>/dev/null \
-          | jq -c '.[]' 2>/dev/null \
-          | while IFS= read -r item; do
-              NAME=$(echo "$item" | jq -r '.name')
-              ILOC=$(echo "$item" | jq -r '.location')
-              RG=$(echo "$item" | jq -r '.id' | cut -d'/' -f5)
-              [ -z "$NAME" ] && continue
-              echo "Purging soft-deleted OpenAI account: $NAME (rg=$RG, loc=$ILOC)"
-              az cognitiveservices account purge \
-                --name "$NAME" --resource-group "$RG" --location "$ILOC" || true
-            done
+            --url "https://management.azure.com/subscriptions/${SUB}/providers/Microsoft.CognitiveServices/deletedAccounts?api-version=2024-04-01-preview" \
+            -o json 2>&1) || OAI_DELETED='{"value":[]}'
+          echo "Deleted accounts found: $(echo "$OAI_DELETED" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print([a['name'] for a in d.get('value',[])])" 2>/dev/null)"
+          echo "$OAI_DELETED" | python3 -c "
+          import json, subprocess, sys
+          try:
+              data = json.loads(sys.stdin.read())
+              for acct in data.get('value', []):
+                  name = acct.get('name', '')
+                  if not name.startswith('damacae-oai'):
+                      continue
+                  loc = acct.get('location', '')
+                  rg  = acct.get('id', '').split('/')[4] if '/' in acct.get('id','') else ''
+                  print(f'Purging: {name} (rg={rg}, loc={loc})', flush=True)
+                  r = subprocess.run(['az','cognitiveservices','account','purge',
+                                      '--name', name, '--resource-group', rg, '--location', loc])
+                  print(f'Exit code: {r.returncode}', flush=True)
+          except Exception as e:
+              print(f'Parse error: {e}', file=sys.stderr)
+          " || true
 
       - name: AZD Provision
         if: ${{ github.event.inputs.skip_infra != 'true' }}
@@ -341,31 +352,41 @@ jobs:
           SUB="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           LOC="${{ vars.AZURE_LOCATION }}"
 
-          # Key Vaults
+          # ── Key Vaults ─────────────────────────────────────────────────────
+          echo "=== Key Vault soft-delete purge ==="
           az keyvault list-deleted \
             --subscription "$SUB" \
-            --query "[?starts_with(name, 'damacae-kv')].name" -o tsv 2>/dev/null \
+            --query "[?starts_with(name, 'damacae-kv')].name" -o tsv 2>&1 \
           | while IFS= read -r kv; do
               [ -z "$kv" ] && continue
-              echo "Purging soft-deleted Key Vault: $kv"
-              az keyvault purge --name "$kv" --location "$LOC" --subscription "$SUB" || true
+              echo "Purging Key Vault: $kv"
+              az keyvault purge --name "$kv" --location "$LOC" --subscription "$SUB" 2>&1 || true
             done
 
-          # Azure OpenAI / Cognitive Services
-          az rest \
+          # ── Azure OpenAI / Cognitive Services ──────────────────────────────
+          echo "=== OpenAI soft-delete purge ==="
+          OAI_DELETED=$(az rest \
             --method GET \
-            --url "https://management.azure.com/subscriptions/${SUB}/providers/Microsoft.CognitiveServices/deletedAccounts?api-version=2023-05-01" \
-            --query "value[?starts_with(name, 'damacae-oai')]" -o json 2>/dev/null \
-          | jq -c '.[]' 2>/dev/null \
-          | while IFS= read -r item; do
-              NAME=$(echo "$item" | jq -r '.name')
-              ILOC=$(echo "$item" | jq -r '.location')
-              RG=$(echo "$item" | jq -r '.id' | cut -d'/' -f5)
-              [ -z "$NAME" ] && continue
-              echo "Purging soft-deleted OpenAI account: $NAME (rg=$RG, loc=$ILOC)"
-              az cognitiveservices account purge \
-                --name "$NAME" --resource-group "$RG" --location "$ILOC" || true
-            done
+            --url "https://management.azure.com/subscriptions/${SUB}/providers/Microsoft.CognitiveServices/deletedAccounts?api-version=2024-04-01-preview" \
+            -o json 2>&1) || OAI_DELETED='{"value":[]}'
+          echo "Deleted accounts found: $(echo "$OAI_DELETED" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print([a['name'] for a in d.get('value',[])])" 2>/dev/null)"
+          echo "$OAI_DELETED" | python3 -c "
+          import json, subprocess, sys
+          try:
+              data = json.loads(sys.stdin.read())
+              for acct in data.get('value', []):
+                  name = acct.get('name', '')
+                  if not name.startswith('damacae-oai'):
+                      continue
+                  loc = acct.get('location', '')
+                  rg  = acct.get('id', '').split('/')[4] if '/' in acct.get('id','') else ''
+                  print(f'Purging: {name} (rg={rg}, loc={loc})', flush=True)
+                  r = subprocess.run(['az','cognitiveservices','account','purge',
+                                      '--name', name, '--resource-group', rg, '--location', loc])
+                  print(f'Exit code: {r.returncode}', flush=True)
+          except Exception as e:
+              print(f'Parse error: {e}', file=sys.stderr)
+          " || true
 
       - name: AZD Provision Production
         env:
