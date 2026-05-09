@@ -92,6 +92,20 @@ jobs:
           echo "object_id=$ADMIN_OID" >> $GITHUB_OUTPUT
 
       # ── Infrastructure Provisioning ──────────────────────────────────────
+      - name: Purge soft-deleted Key Vaults
+        if: ${{ github.event.inputs.skip_infra != 'true' }}
+        run: |
+          az keyvault list-deleted \
+            --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+            --query "[?starts_with(name, 'damacae-kv')].name" -o tsv 2>/dev/null \
+          | while IFS= read -r kv; do
+              [ -z "$kv" ] && continue
+              echo "Purging soft-deleted Key Vault: $kv"
+              az keyvault purge --name "$kv" \
+                --location "${{ vars.AZURE_LOCATION }}" \
+                --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}" || true
+            done
+
       - name: AZD Provision
         if: ${{ github.event.inputs.skip_infra != 'true' }}
         env:
@@ -303,6 +317,19 @@ jobs:
         run: |
           ADMIN_OID=$(az ad sp show --id ${{ secrets.AZURE_CLIENT_ID }} --query id -o tsv)
           echo "object_id=$ADMIN_OID" >> $GITHUB_OUTPUT
+
+      - name: Purge soft-deleted Key Vaults
+        run: |
+          az keyvault list-deleted \
+            --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+            --query "[?starts_with(name, 'damacae-kv')].name" -o tsv 2>/dev/null \
+          | while IFS= read -r kv; do
+              [ -z "$kv" ] && continue
+              echo "Purging soft-deleted Key Vault: $kv"
+              az keyvault purge --name "$kv" \
+                --location "${{ vars.AZURE_LOCATION }}" \
+                --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}" || true
+            done
 
       - name: AZD Provision Production
         env:
