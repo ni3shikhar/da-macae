@@ -283,13 +283,20 @@ jobs:
           deploy_app "damacae-frontend${SUFFIX:+-$SUFFIX}" "${ACR}/agentra-frontend:${TAG}"
           deploy_app "damacae-mcp${SUFFIX:+-$SUFFIX}"      "${ACR}/agentra-mcp:${TAG}"
 
-          # Wait for all three to finish
+          # Wait for all three revisions to finish provisioning
           for APP in "damacae-backend${SUFFIX:+-$SUFFIX}" "damacae-frontend${SUFFIX:+-$SUFFIX}" "damacae-mcp${SUFFIX:+-$SUFFIX}"; do
             echo "Waiting for $APP..."
-            az containerapp revision list --name "$APP" --resource-group "$RG" \
-              --query "[-1].name" -o tsv | xargs -I{} \
-              az containerapp revision show --name "$APP" --resource-group "$RG" --revision {} \
-              --query "properties.provisioningState" -o tsv || true
+            for i in $(seq 1 24); do
+              REV=$(az containerapp revision list --name "$APP" --resource-group "$RG" \
+                --query "[-1].name" -o tsv 2>/dev/null || echo "")
+              [ -z "$REV" ] && sleep 10 && continue
+              STATE=$(az containerapp revision show --name "$APP" --resource-group "$RG" --revision "$REV" \
+                --query "properties.provisioningState" -o tsv 2>/dev/null || echo "Unknown")
+              echo "  $APP revision $REV: $STATE"
+              [ "$STATE" = "Provisioned" ] && break
+              [ "$STATE" = "Failed" ] && echo "ERROR: $APP revision failed" && exit 1
+              sleep 10
+            done
           done
 
       - name: Get endpoints
@@ -474,10 +481,17 @@ jobs:
 
           for APP in damacae-backend damacae-frontend damacae-mcp; do
             echo "Waiting for $APP..."
-            az containerapp revision list --name "$APP" --resource-group "damacae-rg" \
-              --query "[-1].name" -o tsv | xargs -I{} \
-              az containerapp revision show --name "$APP" --resource-group "damacae-rg" --revision {} \
-              --query "properties.provisioningState" -o tsv || true
+            for i in $(seq 1 24); do
+              REV=$(az containerapp revision list --name "$APP" --resource-group "damacae-rg" \
+                --query "[-1].name" -o tsv 2>/dev/null || echo "")
+              [ -z "$REV" ] && sleep 10 && continue
+              STATE=$(az containerapp revision show --name "$APP" --resource-group "damacae-rg" --revision "$REV" \
+                --query "properties.provisioningState" -o tsv 2>/dev/null || echo "Unknown")
+              echo "  $APP revision $REV: $STATE"
+              [ "$STATE" = "Provisioned" ] && break
+              [ "$STATE" = "Failed" ] && echo "ERROR: $APP revision failed" && exit 1
+              sleep 10
+            done
           done
 
       - name: Production deployment summary

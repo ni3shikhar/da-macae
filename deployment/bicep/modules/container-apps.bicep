@@ -28,6 +28,8 @@ var placeholderImage = 'mcr.microsoft.com/k8se/quickstart:latest'
 // AcrPull built-in role definition ID (constant across all subscriptions)
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 
+var acrLoginServer = '${acrName}.azurecr.io'
+
 // Reference existing ACR so we can scope role assignments to it
 resource acr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' existing = {
   name: acrName
@@ -78,7 +80,12 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8000
         transport: 'http'
       }
-      registries: []
+      registries: [
+        {
+          server: acrLoginServer
+          identity: 'system'
+        }
+      ]
     }
     template: {
       containers: [
@@ -117,7 +124,12 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 80
         transport: 'http'
       }
-      registries: []
+      registries: [
+        {
+          server: acrLoginServer
+          identity: 'system'
+        }
+      ]
     }
     template: {
       containers: [
@@ -162,7 +174,12 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8001
         transport: 'http'
       }
-      registries: []
+      registries: [
+        {
+          server: acrLoginServer
+          identity: 'system'
+        }
+      ]
     }
     template: {
       containers: [
