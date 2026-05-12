@@ -131,3 +131,6 @@ output name string = openAi.name
 output endpoint string = openAi.properties.endpoint
 output gpt4oDeploymentName string = gpt4oDeployment.name
 output embeddingDeploymentName string = embeddingDeployment.name
+
+@secure()
+output apiKey string = openAi.listKeys().key1

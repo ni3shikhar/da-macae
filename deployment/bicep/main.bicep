@@ -186,6 +186,9 @@ module containerApps 'modules/container-apps.bicep' = {
     location: location
     acrName: acr.outputs.name
     logAnalyticsWorkspaceName: monitoring.outputs.logAnalyticsWorkspaceName
+    openAiEndpoint: openAi.outputs.endpoint
+    openAiApiKey: openAi.outputs.apiKey
+    openAiChatDeployment: openAi.outputs.gpt4oDeploymentName
     tags: tags
   }
 }

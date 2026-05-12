@@ -21,6 +21,16 @@ param acrName string
 @description('Log Analytics workspace name')
 param logAnalyticsWorkspaceName string
 
+@description('Azure OpenAI endpoint URL')
+param openAiEndpoint string
+
+@description('Azure OpenAI API key')
+@secure()
+param openAiApiKey string
+
+@description('Azure OpenAI chat deployment name')
+param openAiChatDeployment string
+
 // Always use public placeholder image for initial provisioning.
 // azd deploy will update containers with real ACR images afterward.
 var placeholderImage = 'mcr.microsoft.com/k8se/quickstart:latest'
@@ -86,6 +96,12 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
           identity: 'system'
         }
       ]
+      secrets: [
+        {
+          name: 'azure-openai-api-key'
+          value: openAiApiKey
+        }
+      ]
     }
     template: {
       containers: [
@@ -96,6 +112,20 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json('1.0')
             memory: '2Gi'
           }
+          env: [
+            {
+              name: 'AZURE_OPENAI_ENDPOINT'
+              value: openAiEndpoint
+            }
+            {
+              name: 'AZURE_OPENAI_API_KEY'
+              secretRef: 'azure-openai-api-key'
+            }
+            {
+              name: 'AZURE_OPENAI_CHAT_DEPLOYMENT'
+              value: openAiChatDeployment
+            }
+          ]
         }
       ]
       scale: {

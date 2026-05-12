@@ -937,8 +937,8 @@ class OrchestrationManager:
         if raw_plan is None:
             if last_exc:
                 raise last_exc
-            # No LLM client available — generate a default migration plan
-            raw_plan = self._generate_default_plan(goal, agent_names)
+            # No LLM client available — generate a default plan from team agents
+            raw_plan = self._generate_default_plan(goal, team_config)
 
         return parse_planner_response(raw_plan, plan_id, agent_names)
 
@@ -1045,33 +1045,45 @@ Consider:
 
 Return a JSON object with a "task" field and a "steps" array."""
 
-    def _generate_default_plan(self, goal: str, agents: list[str]) -> str:
-        """Generate a default migration plan for local development.
+    def _generate_default_plan(
+        self, goal: str, team_config: TeamConfiguration
+    ) -> str:
+        """Generate a default plan from the team's actual agents.
 
-        Includes an environment setup step early in the pipeline so the
-        target environment is provisioned/verified before migration begins.
+        Used as a fallback when the planner LLM is unavailable. Domain
+        agents run in parallel; any agent whose name contains "Reporting"
+        runs last and depends on all domain agents.
         """
         import json
 
-        default_steps = [
-            {"step_number": 1, "agent": "DiscoveryAgent", "task": "Discover source database schema and metadata", "dependencies": []},
-            {"step_number": 2, "agent": "InfrastructureAgent", "task": "Verify target environment exists and provision resources if not present", "dependencies": []},
-            {"step_number": 3, "agent": "DataSetupAgent", "task": "Load seed data into source/target database for mapping and testing", "dependencies": [1, 2]},
-            {"step_number": 4, "agent": "AnalysisAgent", "task": "Analyze migration complexity and risks", "dependencies": [1]},
-            {"step_number": 5, "agent": "MappingAgent", "task": "Generate source-to-target schema mapping", "dependencies": [1, 3, 4]},
-            {"step_number": 6, "agent": "TransformationAgent", "task": "Define data transformation rules", "dependencies": [5]},
-            {"step_number": 7, "agent": "DataQualityAgent", "task": "Create data validation rules", "dependencies": [5, 6]},
-            {"step_number": 8, "agent": "PipelineGenerationAgent", "task": "Generate linked-service connections and migration pipeline definitions for the target Azure service (ADF/Synapse/Fabric)", "dependencies": [2, 6, 7]},
-            {"step_number": 9, "agent": "ReportingAgent", "task": "Generate migration summary report", "dependencies": [1, 2, 3, 4, 5, 6, 7, 8]},
-        ]
-        # Filter to available agents
-        available = {a.lower().replace("agent", "") for a in agents}
-        steps = [
-            s for s in default_steps
-            if s["agent"].lower().replace("agent", "") in available or s["agent"] in agents
-        ]
-        if not steps:
-            steps = default_steps  # Use all if none match
+        skip = {"humanproxy", "proxyagent", "useragent"}
+        domain_agents = []
+        reporting_agents = []
+        for agent in team_config.agents:
+            if agent.name.lower() in skip:
+                continue
+            if "reporting" in agent.name.lower():
+                reporting_agents.append(agent)
+            else:
+                domain_agents.append(agent)
+
+        steps: list[dict] = []
+        for idx, agent in enumerate(domain_agents, start=1):
+            steps.append({
+                "step_number": idx,
+                "agent": agent.name,
+                "task": agent.description or f"Execute {agent.name}",
+                "dependencies": [],
+            })
+
+        domain_deps = list(range(1, len(domain_agents) + 1))
+        for offset, agent in enumerate(reporting_agents, start=1):
+            steps.append({
+                "step_number": len(domain_agents) + offset,
+                "agent": agent.name,
+                "task": agent.description or f"Compile report via {agent.name}",
+                "dependencies": domain_deps,
+            })
 
         return json.dumps({"task": goal, "steps": steps})
 
