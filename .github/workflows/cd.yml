@@ -155,6 +155,10 @@ jobs:
           azd env config set infra.parameters.projectName "damacae"
           azd env config set infra.parameters.anthropicApiKey "${{ secrets.ANTHROPIC_API_KEY }}"
 
+          # Sanity check: confirm the Anthropic secret made it through (logs length only, not the value)
+          ANTHROPIC_LEN=$(printf '%s' "${{ secrets.ANTHROPIC_API_KEY }}" | wc -c)
+          echo "::notice::ANTHROPIC_API_KEY length: ${ANTHROPIC_LEN} (0 means secret is missing or wrong scope)"
+
           azd provision --no-prompt
 
           # Explicitly tell azd which resource group to deploy into.
