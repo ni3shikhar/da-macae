@@ -61,9 +61,18 @@ class TeamService:
             logger.warning("teams_dir_not_found", path=str(teams_dir))
             return loaded
 
+        # Team JSON files embed the docker-compose MCP hostname for local dev.
+        # In Azure Container Apps the MCP server is at a different FQDN, so
+        # substitute it from MCP_SERVER_URL when set.
+        mcp_url_override = os.getenv("MCP_SERVER_URL")
         for json_file in teams_dir.glob("*.json"):
             try:
-                data = json.loads(json_file.read_text(encoding="utf-8"))
+                content = json_file.read_text(encoding="utf-8")
+                if mcp_url_override:
+                    content = content.replace(
+                        "http://mcp-server:8001", mcp_url_override
+                    )
+                data = json.loads(content)
                 team = TeamConfiguration(**data)
                 team.user_id = "system"  # Built-in teams are system-level
 

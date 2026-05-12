@@ -125,6 +125,10 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'AZURE_OPENAI_CHAT_DEPLOYMENT'
               value: openAiChatDeployment
             }
+            {
+              name: 'MCP_SERVER_URL'
+              value: 'https://${mcpApp.properties.configuration.ingress.fqdn}'
+            }
           ]
         }
       ]
