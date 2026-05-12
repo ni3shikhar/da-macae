@@ -143,7 +143,7 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
           env: [
             {
               name: 'BACKEND_URL'
-              value: 'http://${projectName}-backend${envSuffix}'
+              value: 'http://${backendApp.properties.configuration.ingress.fqdn}'
             }
           ]
         }
