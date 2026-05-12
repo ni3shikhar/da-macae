@@ -24,16 +24,18 @@ def _resolve_teams_dir() -> Path:
     env_dir = os.getenv("TEAM_DATA_DIR")
     if env_dir:
         return Path(env_dir)
-    # Walk up from this file to the project root (src/backend/v1/common/services → src → project)
-    # In Docker: /app/data/agent_teams; locally: ../../data/agent_teams relative to src/backend
-    candidates = [
-        Path(__file__).resolve().parents[5] / "data" / "agent_teams",  # project root
-        Path("/app/data/agent_teams"),  # Docker default
-    ]
-    for c in candidates:
-        if c.exists():
-            return c
-    return candidates[0]
+    # In Docker: file is at /app/v1/common/services/team_service.py so parents[3]=/app
+    # Locally: file is deeper (src/backend/v1/common/services/) so parents[5]=project root
+    docker_path = Path("/app/data/agent_teams")
+    if docker_path.exists():
+        return docker_path
+    try:
+        local_path = Path(__file__).resolve().parents[5] / "data" / "agent_teams"
+        if local_path.exists():
+            return local_path
+    except IndexError:
+        pass
+    return docker_path
 
 
 DEFAULT_TEAMS_DIR = _resolve_teams_dir()
