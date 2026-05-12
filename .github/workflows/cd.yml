@@ -153,11 +153,6 @@ jobs:
           azd env config set infra.parameters.adminObjectId "${{ steps.admin.outputs.object_id }}"
           azd env config set infra.parameters.environment "${{ needs.setup.outputs.environment }}"
           azd env config set infra.parameters.projectName "damacae"
-          azd env config set infra.parameters.anthropicApiKey "${{ secrets.ANTHROPIC_API_KEY }}"
-
-          # Sanity check: confirm the Anthropic secret made it through (logs length only, not the value)
-          ANTHROPIC_LEN=$(printf '%s' "${{ secrets.ANTHROPIC_API_KEY }}" | wc -c)
-          echo "::notice::ANTHROPIC_API_KEY length: ${ANTHROPIC_LEN} (0 means secret is missing or wrong scope)"
 
           azd provision --no-prompt
 
@@ -189,7 +184,6 @@ jobs:
           azd env config set infra.parameters.adminObjectId "${{ steps.admin.outputs.object_id }}"
           azd env config set infra.parameters.environment "${{ needs.setup.outputs.environment }}"
           azd env config set infra.parameters.projectName "damacae"
-          azd env config set infra.parameters.anthropicApiKey "${{ secrets.ANTHROPIC_API_KEY }}"
 
           ENV="${{ needs.setup.outputs.environment }}"
           RG="damacae-rg-${ENV}"
@@ -305,6 +299,38 @@ jobs:
             done
           done
 
+      # ── Configure Anthropic on the backend (post-Bicep) ──────────────────
+      # Bicep manages the env-var list declaratively, so adding ANTHROPIC_API_KEY
+      # to Bicep would require @secure() params which azd does not reliably pass.
+      # We set the secret + env var directly via az CLI after every deploy so
+      # the value survives subsequent azd provision runs (which would otherwise
+      # wipe non-Bicep env vars on the backend).
+      - name: Configure Anthropic on backend
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY secret not set — skipping Claude provider configuration"
+            exit 0
+          fi
+
+          ENV="${{ needs.setup.outputs.environment }}"
+          RG="damacae-rg-${ENV}"
+          if [ "$ENV" == "prod" ]; then RG="damacae-rg"; fi
+          SUFFIX="${ENV}"
+          if [ "$ENV" == "prod" ]; then SUFFIX=""; fi
+          BACKEND_APP="damacae-backend${SUFFIX:+-$SUFFIX}"
+
+          az containerapp secret set \
+            --name "$BACKEND_APP" --resource-group "$RG" \
+            --secrets "anthropic-api-key=$ANTHROPIC_API_KEY" >/dev/null
+
+          az containerapp update \
+            --name "$BACKEND_APP" --resource-group "$RG" \
+            --set-env-vars "ANTHROPIC_API_KEY=secretref:anthropic-api-key" >/dev/null
+
+          echo "::notice::Anthropic API key configured on $BACKEND_APP"
+
       - name: Get endpoints
         id: endpoints
         run: |
@@ -418,7 +444,6 @@ jobs:
           azd env config set infra.parameters.adminObjectId "${{ steps.admin.outputs.object_id }}"
           azd env config set infra.parameters.environment "prod"
           azd env config set infra.parameters.projectName "damacae"
-          azd env config set infra.parameters.anthropicApiKey "${{ secrets.ANTHROPIC_API_KEY }}"
 
           azd provision --no-prompt
           azd env set AZURE_RESOURCE_GROUP "damacae-rg"
@@ -500,6 +525,22 @@ jobs:
               sleep 10
             done
           done
+
+      - name: Configure Anthropic on backend
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY secret not set — skipping Claude provider configuration"
+            exit 0
+          fi
+          az containerapp secret set \
+            --name "damacae-backend" --resource-group "damacae-rg" \
+            --secrets "anthropic-api-key=$ANTHROPIC_API_KEY" >/dev/null
+          az containerapp update \
+            --name "damacae-backend" --resource-group "damacae-rg" \
+            --set-env-vars "ANTHROPIC_API_KEY=secretref:anthropic-api-key" >/dev/null
+          echo "::notice::Anthropic API key configured on damacae-backend"
 
       - name: Production deployment summary
         run: |

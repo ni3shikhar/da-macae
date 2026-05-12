@@ -26,10 +26,6 @@ param adminObjectId string
 @description('Azure OpenAI model deployment name')
 param openAiModelDeployment string = 'gpt-4o'
 
-@description('Anthropic Claude API key (optional). Leave empty to disable Claude provider.')
-@secure()
-param anthropicApiKey string = ''
-
 @description('Tags applied to all resources')
 param tags object = {
   project: 'da-macae'
@@ -193,7 +189,6 @@ module containerApps 'modules/container-apps.bicep' = {
     openAiEndpoint: openAi.outputs.endpoint
     openAiApiKey: openAi.outputs.apiKey
     openAiChatDeployment: openAi.outputs.gpt4oDeploymentName
-    anthropicApiKey: anthropicApiKey
     tags: tags
   }
 }
