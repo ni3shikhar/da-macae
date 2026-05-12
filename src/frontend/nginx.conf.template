@@ -26,9 +26,13 @@ server {
         proxy_redirect off;
     }
 
-    # WebSocket proxy — rewrite /ws/ to /api/v1/ws/ to match backend router prefix
+    # WebSocket proxy — rewrite /ws/{user_id} to /api/v1/ws/{user_id} to match the backend router prefix.
+    # We use rewrite + variable-proxy_pass (no URI in the variable) so the user_id suffix is preserved.
+    # Putting a URI in a variable-proxy_pass causes nginx to drop the suffix, which led to 403s on
+    # /api/v1/ws/ (missing path param).
     location /ws/ {
-        set $backend_ws "${BACKEND_URL}/api/v1/ws/";
+        rewrite ^/ws/(.*)$ /api/v1/ws/$1 break;
+        set $backend_ws "${BACKEND_URL}";
         proxy_pass $backend_ws;
         proxy_http_version 1.1;
         proxy_ssl_verify off;
