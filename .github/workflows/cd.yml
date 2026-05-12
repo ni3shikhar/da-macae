@@ -153,6 +153,7 @@ jobs:
           azd env config set infra.parameters.adminObjectId "${{ steps.admin.outputs.object_id }}"
           azd env config set infra.parameters.environment "${{ needs.setup.outputs.environment }}"
           azd env config set infra.parameters.projectName "damacae"
+          azd env config set infra.parameters.anthropicApiKey "${{ secrets.ANTHROPIC_API_KEY }}"
 
           azd provision --no-prompt
 
@@ -184,6 +185,7 @@ jobs:
           azd env config set infra.parameters.adminObjectId "${{ steps.admin.outputs.object_id }}"
           azd env config set infra.parameters.environment "${{ needs.setup.outputs.environment }}"
           azd env config set infra.parameters.projectName "damacae"
+          azd env config set infra.parameters.anthropicApiKey "${{ secrets.ANTHROPIC_API_KEY }}"
 
           ENV="${{ needs.setup.outputs.environment }}"
           RG="damacae-rg-${ENV}"
@@ -412,6 +414,7 @@ jobs:
           azd env config set infra.parameters.adminObjectId "${{ steps.admin.outputs.object_id }}"
           azd env config set infra.parameters.environment "prod"
           azd env config set infra.parameters.projectName "damacae"
+          azd env config set infra.parameters.anthropicApiKey "${{ secrets.ANTHROPIC_API_KEY }}"
 
           azd provision --no-prompt
           azd env set AZURE_RESOURCE_GROUP "damacae-rg"

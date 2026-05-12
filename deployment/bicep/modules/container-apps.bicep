@@ -31,6 +31,10 @@ param openAiApiKey string
 @description('Azure OpenAI chat deployment name')
 param openAiChatDeployment string
 
+@description('Anthropic Claude API key (optional). Leave empty to disable Claude provider.')
+@secure()
+param anthropicApiKey string = ''
+
 // Always use public placeholder image for initial provisioning.
 // azd deploy will update containers with real ACR images afterward.
 var placeholderImage = 'mcr.microsoft.com/k8se/quickstart:latest'
@@ -96,12 +100,20 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
           identity: 'system'
         }
       ]
-      secrets: [
-        {
-          name: 'azure-openai-api-key'
-          value: openAiApiKey
-        }
-      ]
+      secrets: concat(
+        [
+          {
+            name: 'azure-openai-api-key'
+            value: openAiApiKey
+          }
+        ],
+        empty(anthropicApiKey) ? [] : [
+          {
+            name: 'anthropic-api-key'
+            value: anthropicApiKey
+          }
+        ]
+      )
     }
     template: {
       containers: [
@@ -112,20 +124,28 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json('1.0')
             memory: '2Gi'
           }
-          env: [
-            {
-              name: 'AZURE_OPENAI_ENDPOINT'
-              value: openAiEndpoint
-            }
-            {
-              name: 'AZURE_OPENAI_API_KEY'
-              secretRef: 'azure-openai-api-key'
-            }
-            {
-              name: 'AZURE_OPENAI_CHAT_DEPLOYMENT'
-              value: openAiChatDeployment
-            }
-          ]
+          env: concat(
+            [
+              {
+                name: 'AZURE_OPENAI_ENDPOINT'
+                value: openAiEndpoint
+              }
+              {
+                name: 'AZURE_OPENAI_API_KEY'
+                secretRef: 'azure-openai-api-key'
+              }
+              {
+                name: 'AZURE_OPENAI_CHAT_DEPLOYMENT'
+                value: openAiChatDeployment
+              }
+            ],
+            empty(anthropicApiKey) ? [] : [
+              {
+                name: 'ANTHROPIC_API_KEY'
+                secretRef: 'anthropic-api-key'
+              }
+            ]
+          )
         }
       ]
       scale: {
