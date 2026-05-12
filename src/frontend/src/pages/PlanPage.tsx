@@ -598,34 +598,52 @@ export default function PlanPage() {
     });
   }, []);
 
-  // Load plan
+  // Load plan. Plans are created asynchronously by the backend after
+  // /process_request returns 202, so when this page mounts the plan may not
+  // exist yet. We poll for up to ~60s so the UI recovers even if the
+  // WebSocket PLAN_APPROVAL event is missed.
   useEffect(() => {
-    const fetchPlan = async () => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const POLL_INTERVAL_MS = 2000;
+    const MAX_ATTEMPTS = 30;
+
+    const tryFetch = async (attempt: number): Promise<void> => {
       try {
         if (planId) {
           const p = await getPlan(planId, USER_ID);
+          if (cancelled) return;
           setPlan(p);
           hydrateSubtasks(p);
           const msgs = await getAgentMessages(planId);
-          setMessages(msgs);
+          if (!cancelled) setMessages(msgs);
         } else {
-          // Get most recent plan
           const plans = await getPlans(USER_ID);
+          if (cancelled) return;
           if (plans.length > 0) {
             const latest = plans[plans.length - 1];
             setPlan(latest);
             hydrateSubtasks(latest);
             const msgs = await getAgentMessages(latest.id);
-            setMessages(msgs);
+            if (!cancelled) setMessages(msgs);
+          } else if (attempt < MAX_ATTEMPTS) {
+            timer = setTimeout(() => tryFetch(attempt + 1), POLL_INTERVAL_MS);
+            return;
           }
         }
       } catch (err) {
         console.error("Failed to load plan:", err);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
-    fetchPlan();
+
+    tryFetch(0);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [planId, hydrateSubtasks]);
 
   // WebSocket connection
