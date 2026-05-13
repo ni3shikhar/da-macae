@@ -391,20 +391,42 @@ class AzureAgentBase:
                     name=self.name,
                     model=claude_model,
                     tools_count=len(self._mcp_tool_names),
+                    mcp_server_url=self._mcp_server_url,
                     task=task[:200],
                 )
-                return await run_agent_with_claude(  # returns dict
-                    anthropic_client=self._anthropic_client,
-                    model=claude_model,
-                    system_prompt=self.instructions,
-                    task=task,
-                    mcp_server_url=self._mcp_server_url,
-                    tool_names=self._mcp_tool_names,
-                    agent_name=self.name,
-                    on_progress=on_progress,
-                    subtask_label=subtask_label,
-                    is_final_step=is_final_step,
-                )
+                try:
+                    return await asyncio.wait_for(
+                        run_agent_with_claude(
+                            anthropic_client=self._anthropic_client,
+                            model=claude_model,
+                            system_prompt=self.instructions,
+                            task=task,
+                            mcp_server_url=self._mcp_server_url,
+                            tool_names=self._mcp_tool_names,
+                            agent_name=self.name,
+                            on_progress=on_progress,
+                            subtask_label=subtask_label,
+                            is_final_step=is_final_step,
+                        ),
+                        timeout=600,
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(
+                        "agent_run_claude_mcp_timeout",
+                        name=self.name,
+                        mcp_server_url=self._mcp_server_url,
+                        timeout_seconds=600,
+                    )
+                    raise
+                except Exception as exc:
+                    logger.exception(
+                        "agent_run_claude_mcp_failed",
+                        name=self.name,
+                        mcp_server_url=self._mcp_server_url,
+                        error_type=type(exc).__name__,
+                        error=str(exc)[:500],
+                    )
+                    raise
 
             # ── Mode 2b: Azure OpenAI + MCP tool calling ──────────
             if self._openai_client and self._mcp_server_url:
