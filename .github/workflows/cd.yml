@@ -321,13 +321,32 @@ jobs:
           if [ "$ENV" == "prod" ]; then SUFFIX=""; fi
           BACKEND_APP="damacae-backend${SUFFIX:+-$SUFFIX}"
 
-          az containerapp secret set \
-            --name "$BACKEND_APP" --resource-group "$RG" \
-            --secrets "anthropic-api-key=$ANTHROPIC_API_KEY" >/dev/null
+          # The image-update step uses --no-wait, so the backend may still be
+          # provisioning when we get here. Retry on ContainerAppOperationInProgress.
+          run_with_retry() {
+            for i in $(seq 1 18); do
+              if "$@" 2>/tmp/az_err; then
+                return 0
+              fi
+              if grep -q "ContainerAppOperationInProgress" /tmp/az_err; then
+                echo "  Container app busy, retry $i/18 in 10s..."
+                sleep 10
+                continue
+              fi
+              cat /tmp/az_err >&2
+              return 1
+            done
+            echo "ERROR: timed out waiting for container app to be free" >&2
+            return 1
+          }
 
-          az containerapp update \
+          run_with_retry az containerapp secret set \
             --name "$BACKEND_APP" --resource-group "$RG" \
-            --set-env-vars "ANTHROPIC_API_KEY=secretref:anthropic-api-key" >/dev/null
+            --secrets "anthropic-api-key=$ANTHROPIC_API_KEY"
+
+          run_with_retry az containerapp update \
+            --name "$BACKEND_APP" --resource-group "$RG" \
+            --set-env-vars "ANTHROPIC_API_KEY=secretref:anthropic-api-key"
 
           echo "::notice::Anthropic API key configured on $BACKEND_APP"
 
@@ -534,12 +553,28 @@ jobs:
             echo "ANTHROPIC_API_KEY secret not set — skipping Claude provider configuration"
             exit 0
           fi
-          az containerapp secret set \
+          run_with_retry() {
+            for i in $(seq 1 18); do
+              if "$@" 2>/tmp/az_err; then
+                return 0
+              fi
+              if grep -q "ContainerAppOperationInProgress" /tmp/az_err; then
+                echo "  Container app busy, retry $i/18 in 10s..."
+                sleep 10
+                continue
+              fi
+              cat /tmp/az_err >&2
+              return 1
+            done
+            echo "ERROR: timed out waiting for container app to be free" >&2
+            return 1
+          }
+          run_with_retry az containerapp secret set \
             --name "damacae-backend" --resource-group "damacae-rg" \
-            --secrets "anthropic-api-key=$ANTHROPIC_API_KEY" >/dev/null
-          az containerapp update \
+            --secrets "anthropic-api-key=$ANTHROPIC_API_KEY"
+          run_with_retry az containerapp update \
             --name "damacae-backend" --resource-group "damacae-rg" \
-            --set-env-vars "ANTHROPIC_API_KEY=secretref:anthropic-api-key" >/dev/null
+            --set-env-vars "ANTHROPIC_API_KEY=secretref:anthropic-api-key"
           echo "::notice::Anthropic API key configured on damacae-backend"
 
       - name: Production deployment summary
